@@ -1,0 +1,10 @@
+name = "lean-lemmanaid"
+version = "0.1.0"
+defaultTargets = ["lean-lemmanaid"]
+
+[[lean_lib]]
+name = "LeanLemmanaid"
+
+[[lean_exe]]
+name = "lean-lemmanaid"
+root = "Main"
