@@ -39,11 +39,11 @@ def fvarSorter (e : Expr) : MetaM (Array FVarId × Array FVarId) := do
       vars := vars.push fvarId
   return (vars, others)
 
-def abstractTemplate'(e : Expr) : MetaM ( Expr) := do
+def abstractTemplate'(e : Expr) : MetaM (Array FVarId × Expr) := do
   let (_, others) ← fvarSorter e
   let fvars := others.map mkFVar
   let absExpr := e.abstract fvars
-  return absExpr
+  return (others, absExpr)
 
 elab "#abstract " t:term : command => runTermElabM fun _ => do
   let e' ← elabTerm t none
@@ -55,9 +55,9 @@ elab "#abstract " t:term : command => runTermElabM fun _ => do
 elab "#abstract_less " t:term : command => runTermElabM fun _ => do
   let e' ← elabTerm t none
   let e ← instantiateMVars e'
-  let absExpr ← abstractTemplate' e
+  let (fvarIds, absExpr) ← abstractTemplate' e
   IO.println s!"{absExpr}"
-  logInfo m!"Abstracted: {absExpr}"
+  logInfo m!"{fvarIds.size} free variables: {fvarIds.map (mkFVar ·)}\nOriginal: {e}\nAbstracted: {absExpr}"
 
 -- elab "#inst " e:Expr : command => runTermElabM fun _ => do
 
@@ -98,9 +98,9 @@ elab "#show_and_abstract " id:ident : command => runTermElabM fun _ ↦ do
   let name ← resolveGlobalConstNoOverload id
   let info ← getConstInfo name
   Lean.Meta.forallTelescope info.type fun _ body ↦ do
-    let (_, absExpr) ← abstractTemplate body
+    let (fvarIds, absExpr) ← abstractTemplate body
     IO.println s!"\n{absExpr}"
-    -- logInfo m!"{fvars.size} free variables: {fvarIds.map (mkFVar ·)}\nOriginal: {body}\nAbstracted: {absExpr}"
+    logInfo m!"{fvarIds.size} free variables: {fvarIds.map (mkFVar ·)}\nOriginal: {body}\nAbstracted: {absExpr}"
 
 #show Nat.add_comm
 #check Nat.mul_comm
@@ -116,7 +116,7 @@ elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
   let (arity, template) ← if useBang then
     let (vars, others) ← fvarSorter e                         -- Sorts variables
     let e' ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e   -- Makes the variables to forall
-    let template ← abstractTemplate' e'                       -- Then all fvar -> bvar
+    let (_, template) ← abstractTemplate' e'                  -- Then all fvar -> bvar
     pure (others.size, template)
   else
     let (fvarIds, template) ← abstractTemplate e              -- Every fvar -> bvar
