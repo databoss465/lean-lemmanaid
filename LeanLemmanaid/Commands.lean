@@ -61,6 +61,7 @@ elab "#abstract_less " t:term : command => runTermElabM fun _ => do
 
 -- elab "#inst " e:Expr : command => runTermElabM fun _ => do
 
+section Abstraction
 variable {α : Type} [Add α] [Mul α] (f : α → α → α) (g : α → α) (x y z : α) (p₁ p₂ : Prop)
 
 #abstract f (f x y) z
@@ -76,9 +77,13 @@ variable {α : Type} [Add α] [Mul α] (f : α → α → α) (g : α → α) (x
 #abstract ¬ p₁
 #abstract ¬ p₁ ∨ p₂
 
+-- Possible Problem with this
 #abstract x + y = y + x
+#abstract_less x + y = y + x
+
 #abstract ∀ x, g x = y
 #abstract ∃ x, g x = x
+end Abstraction
 
 #eval show MetaM Unit from do
   let info ← getConstInfo ``Rat.add_comm
@@ -100,6 +105,7 @@ elab "#show_and_abstract " id:ident : command => runTermElabM fun _ ↦ do
 #show Nat.add_comm
 #check Nat.mul_comm
 #show_and_abstract Nat.add_comm
+#show_and_abstract Vector.add_comm
 
 elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
   runTermElabM fun _ => do
@@ -108,12 +114,12 @@ elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
   let useBang := bang.isSome
 
   let (arity, template) ← if useBang then
-    let (vars, others) ← fvarSorter e
-    let e' ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e
-    let template ← abstractTemplate' e'
+    let (vars, others) ← fvarSorter e                         -- Sorts variables
+    let e' ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e   -- Makes the variables to forall
+    let template ← abstractTemplate' e'                       -- Then all fvar -> bvar
     pure (others.size, template)
   else
-    let (fvarIds, template) ← abstractTemplate e
+    let (fvarIds, template) ← abstractTemplate e              -- Every fvar -> bvar
     pure (fvarIds.size, template)
 
   logInfo m!"Template : {template}"
@@ -131,29 +137,39 @@ elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
     check result
     Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
     let finalResult ← instantiateMVars result
-    logInfo m!"{finalResult}"
-    IO.println s!"{finalResult}"
+    let abstractResult ← Lean.Meta.abstractMVars finalResult
+    let finalTheorem := abstractResult.expr
+    let thm ← Lean.Meta.lambdaTelescope finalTheorem fun fvars body => do
+      Lean.Meta.mkForallFVars fvars body
+    logInfo m!"{thm}"
+    IO.println s!"{thm}"
   catch ex =>
     logInfo m!"{ex.toMessageData}"
 
-variable (k m n : Nat) (p q : Int)
+-- variable (k m n : Nat) (p q : Int)
+variable {α : Type}(f : α → α → α) (g : α → α) (x y z : α)
 
-#inst f x y = f y x with #[_, HMul.hMul, m, n]
+-- #inst f x y = f y x with #[_, HMul.hMul, m, n]
 #inst! f x y = f y x with #[Nat, HMul.hMul]
 #check Nat.mul_comm
 -- Need forall instead of variables here
 
-#inst f x y = f y x with #[Nat, HAdd.hAdd, m, n]
+-- #inst f x y = f y x with #[Nat, HAdd.hAdd, m, n]
 #inst! f x y = f y x with #[Nat, HAdd.hAdd]
 #check Nat.add_comm
 
-#inst f x (f y z) = f (f x y) z with #[Nat, HMul.hMul, k, m, n]
+-- #inst f x (f y z) = f (f x y) z with #[Nat, HMul.hMul, k, m, n]
 #inst! f x (f y z) = f (f x y) z with #[Nat, HMul.hMul]
 #check Nat.mul_assoc
 
-#check Int.neg_add
-#abstract g (f x y) = f (g x) (g y)
-#inst g (f x y) = f (g x) (g y) with #[Int, Neg.neg, HAdd.hAdd, p, q]
 
-variable {n : Nat}{α : Type}[Add α](u v : Vector α n)
-#inst f x y = f y x with #[Vector _ _, HAdd.hAdd, u, v]
+#abstract g (f x y) = f (g x) (g y)
+-- #inst g (f x y) = f (g x) (g y) with #[Int, Neg.neg, HAdd.hAdd, p, q]
+#inst! g (f x y) = f (g x) (g y) with #[Int, Neg.neg, HAdd.hAdd]
+#check Int.neg_add
+
+-- #inst f x y = f y x with #[Vector _ _, HAdd.hAdd, u, v]
+#inst! f x y = f y x with #[Vector Nat _, HAdd.hAdd]
+
+#inst f x y = y with #[Int, HMul.hMul, 1, _]
+#show Int.one_mul
