@@ -1,4 +1,7 @@
 import Lean
+import LeanLemmanaid.Template
+import LeanLemmanaid.Unifier
+
 open Lean Meta
 -- set_option pp.all true
 
@@ -102,14 +105,10 @@ elab "#show_and_abstract " id:ident : command => runTermElabM fun _ ↦ do
     IO.println s!"\n{absExpr}"
     logInfo m!"{fvarIds.size} free variables: {fvarIds.map (mkFVar ·)}\nOriginal: {body}\nAbstracted: {absExpr}"
 
-#show Nat.add_comm
-#check Nat.mul_comm
-#show_and_abstract Nat.add_comm
-#show_and_abstract Vector.add_comm
-
 elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
   runTermElabM fun _ => do
   let e ← instantiateMVars (← elabTerm t none)
+  IO.println s!"{e}"
 
   let useBang := bang.isSome
 
@@ -147,12 +146,12 @@ elab "#inst" bang:("!")? t:term "with" "#[" args:term,* "]" : command =>
     logInfo m!"{ex.toMessageData}"
 
 -- variable (k m n : Nat) (p q : Int)
+section vars
 variable {α : Type}(f : α → α → α) (g : α → α) (x y z : α)
 
 -- #inst f x y = f y x with #[_, HMul.hMul, m, n]
 #inst! f x y = f y x with #[Nat, HMul.hMul]
 #check Nat.mul_comm
--- Need forall instead of variables here
 
 -- #inst f x y = f y x with #[Nat, HAdd.hAdd, m, n]
 #inst! f x y = f y x with #[Nat, HAdd.hAdd]
@@ -173,3 +172,54 @@ variable {α : Type}(f : α → α → α) (g : α → α) (x y z : α)
 
 #inst f x y = y with #[Int, HMul.hMul, 1, _]
 #show Int.one_mul
+end vars
+
+
+elab tk:"#inst_temp " t:template "with" "#[" args:term,* "]" : command =>
+  liftTermElabM do
+    let expr ← elabTemp t
+    let (_, s) ← (exprInfer expr).run {}
+    let (arity, template) ← withFullContext s fun varMap => do
+        let e₀ ← elabTempExpr expr varMap
+        let e₁ ← instantiateMVars e₀
+        -- withRef tk <| logInfo s!"{e₁}"
+        let (vars, _) ← fvarSorter e₁
+        let e₂ ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e₁
+        let (fvarids, template) ← abstractTemplate e₂
+        -- withRef tk <| logInfo s!"FVars: {fvarids.map (mkFVar ·)}\nTemplate: {template}"
+        pure (fvarids.size, template)
+    let mut subst : Array Expr := #[]
+    for arg in args.getElems do
+      let argExpr ← elabTerm arg none
+      subst := subst.push argExpr
+
+    if subst.size != arity then
+      throwError m!"Arity mismatch! Template has {arity} variables, but input has {subst.size} arguments."
+
+    let result := template.instantiateRev subst
+    -- withRef tk <| logInfo s!"{result}"
+    try
+      check result
+      Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
+      let finalResult ← instantiateMVars result
+      let abstractResult ← Lean.Meta.abstractMVars finalResult
+      let finalTheorem := abstractResult.expr
+      let thm ← Lean.Meta.lambdaTelescope finalTheorem fun fvars body => do
+        Lean.Meta.mkForallFVars fvars body
+      withRef tk <| logInfo m!"{thm}"
+      -- IO.println s!"{thm}"
+    catch ex =>
+      withRef tk <| logInfo m!"{ex.toMessageData}"
+
+#inst_temp H1 x1 x2 = H1 x2 x1 with #[Nat, _, HMul.hMul]
+
+#inst_temp H1 x1 x2 = H1 x2 x1 with #[Nat,_, HAdd.hAdd]
+
+#inst_temp H1 x1 (H1 x2 x3) = H1 (H1 x1 x2) x3 with #[Nat,_, HMul.hMul]
+
+#inst_temp H2 (H1 x1 x2) = H1 (H2 x1) (H2 x2) with #[Int,  Neg.neg, HAdd.hAdd]
+
+#inst_temp H1 x1 x2 = H1 x2 x1 with #[Vector Int _, _, HAdd.hAdd]
+
+-- There has to be a way to give some arguments
+#inst_temp H1 x1 x2 = x2 with #[Int,_ , HMul.hMul]
