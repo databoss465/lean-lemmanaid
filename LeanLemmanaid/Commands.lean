@@ -174,42 +174,37 @@ variable {α : Type}(f : α → α → α) (g : α → α) (x y z : α)
 #show Int.one_mul
 end vars
 
+def instantiateTemplate (expr : tempExpr) (subst : Array Expr) : TermElabM Expr := do
+  let (_, s) ← (exprInfer expr).run {}
+  let (arity, template) ← withFullContext s fun varMap => do
+    let e₀ ← elabTempExpr expr varMap
+    let e₁ ← instantiateMVars e₀
+    -- withRef tk <| logInfo s!"{e₁}"
+    let (vars, _) ← fvarSorter e₁
+    let e₂ ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e₁
+    let (fvarids, template) ← abstractTemplate e₂
+    pure (fvarids.size, template)
+  if subst.size != arity then
+    throwError m!"Arity mismatch! Template has {arity} variables, but input has {subst.size} arguments."
+  let result := template.instantiateRev subst
+  try
+    check result
+    Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
+    let finalResult ← instantiateMVars result
+    let abstractResult ← Lean.Meta.abstractMVars finalResult
+    let finalTheorem := abstractResult.expr
+    let thm ← Lean.Meta.lambdaTelescope finalTheorem fun fvars body => do
+      Lean.Meta.mkForallFVars fvars body
+    return thm
+  catch ex =>
+     throwError "instantiateTemplate failed: {ex.toMessageData}"
 
-elab tk:"#inst_temp " t:template "with" "#[" args:term,* "]" : command =>
+elab tk:"#inst_temp" t:template "with" "#[" args:term,* "]" : command =>
   liftTermElabM do
     let expr ← elabTemp t
-    let (_, s) ← (exprInfer expr).run {}
-    let (arity, template) ← withFullContext s fun varMap => do
-        let e₀ ← elabTempExpr expr varMap
-        let e₁ ← instantiateMVars e₀
-        -- withRef tk <| logInfo s!"{e₁}"
-        let (vars, _) ← fvarSorter e₁
-        let e₂ ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e₁
-        let (fvarids, template) ← abstractTemplate e₂
-        -- withRef tk <| logInfo s!"FVars: {fvarids.map (mkFVar ·)}\nTemplate: {template}"
-        pure (fvarids.size, template)
-    let mut subst : Array Expr := #[]
-    for arg in args.getElems do
-      let argExpr ← elabTerm arg none
-      subst := subst.push argExpr
-
-    if subst.size != arity then
-      throwError m!"Arity mismatch! Template has {arity} variables, but input has {subst.size} arguments."
-
-    let result := template.instantiateRev subst
-    -- withRef tk <| logInfo s!"{result}"
-    try
-      check result
-      Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
-      let finalResult ← instantiateMVars result
-      let abstractResult ← Lean.Meta.abstractMVars finalResult
-      let finalTheorem := abstractResult.expr
-      let thm ← Lean.Meta.lambdaTelescope finalTheorem fun fvars body => do
-        Lean.Meta.mkForallFVars fvars body
-      withRef tk <| logInfo m!"{thm}"
-      -- IO.println s!"{thm}"
-    catch ex =>
-      withRef tk <| logInfo m!"{ex.toMessageData}"
+    let subst ← args.getElems.mapM (elabTerm · none)
+    let thm ← instantiateTemplate expr subst
+    withRef tk <| logInfo m!"{thm}"
 
 #inst_temp H1 x1 x2 = H1 x2 x1 with #[Nat, _, HMul.hMul]
 
@@ -217,9 +212,18 @@ elab tk:"#inst_temp " t:template "with" "#[" args:term,* "]" : command =>
 
 #inst_temp H1 x1 (H1 x2 x3) = H1 (H1 x1 x2) x3 with #[Nat,_, HMul.hMul]
 
+#show Int.neg_add
 #inst_temp H2 (H1 x1 x2) = H1 (H2 x1) (H2 x2) with #[Int,  Neg.neg, HAdd.hAdd]
 
 #inst_temp H1 x1 x2 = H1 x2 x1 with #[Vector Int _, _, HAdd.hAdd]
 
+#check @Vector.add_comm Int
+#inst_temp H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+  with #[_, Int, HAdd.hAdd, Vector Int _, _, HAdd.hAdd]
+
+#inst_temp H1 x1 x2 = H1 x2 x1 → H2 x3 x4 = H2 x4 x3
+  with #[Int, Int, Int, HAdd.hAdd, _, HAdd.hAdd]
+
+
 -- There has to be a way to give some arguments
-#inst_temp H1 x1 x2 = x2 with #[Int,_ , HMul.hMul]
+#inst_temp H1 x1 x2 = x2 with #[Int, _ , HMul.hMul]

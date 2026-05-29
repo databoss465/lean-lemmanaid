@@ -12,6 +12,11 @@ def stxCheck (id : Syntax) (pfx : String) : MetaM Nat := do
 
   return (stx.drop pfx.length).toNat!
 
+
+def mkVarName (idx : Nat) := Name.mkSimple s!"x{idx}"
+def mkOpName (idx : Nat) := Name.mkSimple s!"H{idx}"
+def mkTypeName (idx : Nat) := Name.mkSimple s!"T{idx}"
+
 -- Abstract Syntax Tree
 
 inductive tempLit
@@ -47,12 +52,12 @@ instance : Repr tempBinOp where
     | .imp, _ => "Imp"
 
 inductive tempBinder
-  | forallBind | existsBind
+  | forall | exists
 
 instance : Repr tempBinder where
   reprPrec
-  | .forallBind, _ => "Forall"
-  | .existsBind, _ => "Exists"
+  | .forall, _ => "Forall"
+  | .exists, _ => "Exists"
 
 
 inductive tempExpr
@@ -82,9 +87,9 @@ syntax temp_lit_atom : temp_lit
 syntax temp_lit_atom temp_lit_atom+ : temp_lit
 
 -- Elaborating Literals
--- MIGHT WANT TO REWRITE THIS!!
 
 mutual    -- Functions that call each other
+
 /- Function to elaborate atoms, i.e. x1, (x1), etc.. -/
   partial def elabAtom (stx : Syntax) : MetaM tempLit := do
     match stx with
@@ -93,15 +98,12 @@ mutual    -- Functions that call each other
       if nameStr.startsWith "x" then
         let k ← stxCheck id "x"
         return tempLit.var k
-
       -- H"num" -> Operator Hole
       else if nameStr.startsWith "H" then
         let n ← stxCheck id "H"
         return tempLit.opHole n #[]
-
       else
         throwErrorAt id s!"Unknown Lemmanaid identifier prefix for '{nameStr}'. Expected x, H, or T."
-
     -- If there's a paranthesis
     | `(temp_lit_atom| ( $inner:temp_lit ) ) => elabLit inner
     | _ => throwUnsupportedSyntax
@@ -143,7 +145,7 @@ syntax "or"  : temp_binop
 syntax " ∨ " : temp_binop
 
 syntax " imp " : temp_binop
-syntax "→" : temp_binop
+syntax " → " : temp_binop
 
 def elabBinOp : Syntax → MetaM tempBinOp
   | `(temp_binop| and) | `(temp_binop| ∧) => return .and
@@ -159,8 +161,8 @@ syntax "exists " : temp_binder
 syntax "∃ " : temp_binder
 
 def elabBinder : Syntax → MetaM tempBinder
-  | `(temp_binder| forall) | `(temp_binder| ∀) => return .forallBind
-  | `(temp_binder| exists) | `(temp_binder| ∃)=> return .existsBind
+  | `(temp_binder| forall) | `(temp_binder| ∀) => return .forall
+  | `(temp_binder| exists) | `(temp_binder| ∃)=> return .exists
   | _ => throwUnsupportedSyntax
 
 -- Represents a "lemma" which is a proposition
@@ -172,6 +174,7 @@ syntax temp_lit : template                             -- Some literals, can be 
 syntax temp_unop template : template                  -- Not
 syntax template temp_binop template : template       -- And/Or/Implies
 syntax temp_binder ident ", " template : template     -- Forall/Exists
+syntax temp_binder ident+ ", " template : template
 
 syntax "(" template ")" : template                    -- Grouping
 
@@ -201,16 +204,68 @@ partial def elabTemp : Syntax → MetaM tempExpr
       let varIdx ← stxCheck var "x"
       let eExpr ← elabTemp e
       return .bind binderExpr varIdx eExpr
+  | `(template| $b:temp_binder $var:ident $vars:ident* , $e:template) => do
+      let binderExpr ← elabBinder b
+      let eExpr ← elabTemp e
+      let varIdx ← stxCheck var "x"
+      let varsIdx ← vars.mapM (stxCheck · "x")
+      let inner ← varsIdx.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx pred) eExpr
+      return .bind binderExpr varIdx inner
   | `(template| ($e:template)) =>
-    elabTemp e
+      elabTemp e
   | _ => throwUnsupportedSyntax
 
-/-
-TODO:
-(Major)
-1. Type inference => given T : template, return T' : typedTemplate
-2. Context creation => given T' : typedTemplate create a local context with those variables (To be used in #inst)
-(Minor fixes)
-3. #abstract doesn't abstract the structure of typeclasses
-4. #inst! ... with requires a fixed order of arguments.. can that be relaxed by writing an intelligent filler?
--/
+mutual
+partial def delabAtom (l : tempLit) : MetaM (TSyntax `temp_lit_atom) := do
+  match l with
+  | .var idx => do
+    let name := mkIdent (mkVarName idx)
+    `(temp_lit_atom| $name:ident)
+  | t@(.opHole ..) => do
+    let inner ← delabLit t
+    `(temp_lit_atom| ($inner:temp_lit))
+
+partial def delabLit (l : tempLit) : MetaM (TSyntax `temp_lit) := do
+  match l with
+  | t@(.var _) => do
+    let stx ← delabAtom t
+    `(temp_lit| $stx:temp_lit_atom)
+  | .opHole idx args => do
+    let name := mkIdent (mkOpName idx)
+    let fn ← `(temp_lit_atom| $name:ident)
+    let argStx ← args.mapM delabAtom
+    `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
+end
+
+def delabExpr : tempExpr → MetaM (TSyntax `template)
+  | .lit l => do
+    let stx ← delabLit l
+    `(template| $stx:temp_lit)
+  | .eq l r => do
+    let lStx ← delabLit l
+    let rStx ← delabLit r
+    `(template| $lStx:temp_lit = $rStx:temp_lit)
+  | .un _ e => do
+    let stx ← delabExpr e
+    `(template| ¬ $stx:template)
+  | .bin op l r => do
+    let lStx ← delabExpr l
+    let rStx ← delabExpr r
+    match op with
+    | .and => `(template| $lStx:template ∧ $rStx:template)
+    | .or =>  `(template| $lStx:template ∨ $rStx:template)
+    | .imp =>  `(template| $lStx:template → $rStx:template)
+  | .bind op idx e => do
+    let name := mkIdent (mkVarName idx)
+    let body ← delabExpr e
+    match op with
+    | .forall => `(template| ∀ $name:ident, $body:template)
+    | .exists => `(template| ∃ $name:ident, $body:template)
+
+elab tk:"#test_delab " t:template : command =>
+  liftTermElabM do
+    let e ← elabTemp t
+    let t' ← delabExpr e
+    withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
+
+#test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3

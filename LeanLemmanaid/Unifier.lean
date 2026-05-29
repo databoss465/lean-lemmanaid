@@ -1,5 +1,6 @@
 import Lean
 import LeanLemmanaid.Template
+set_option trace.debug true
 
 open Lean Meta Elab Command Term
 
@@ -161,10 +162,6 @@ elab tk:"#test_inference" b:("!")? t:template : command => runTermElabM fun _ =>
 #test_inference! ∀ x1, ∃ x2, H1 x1 → H2 x2
 #test_inference! H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
 
-def mkVarName (idx : Nat) := Name.mkSimple s!"x{idx}"
-def mkOpName (idx : Nat) := Name.mkSimple s!"H{idx}"
-def mkTypeName (idx : Nat) := Name.mkSimple s!"T{idx}"
-
 partial def withTypeVars {α : Type} (mvars : List MVarId)
     (k : Std.HashMap MVarId Expr → MetaM α): MetaM α := do
   let rec go (xs : List MVarId)
@@ -245,54 +242,52 @@ def withFullContext {α : Type} (s : templateState)
     withTermVars s.typedVars.toList s.typedOps.toList typeMap fun varMap => do
       k varMap
 
-mutual
-  partial def elabTerm (lit : tempLit) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
-    match lit with
-    | .var k =>
-        return varMap.get! (mkVarName k)
+partial def elabTerm (lit : tempLit) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
+  match lit with
+  | .var k =>
+      return varMap.get! (mkVarName k)
 
-    | .opHole n args =>
-        let fvar := varMap.get! (mkOpName n)
-        let mut argExprs := #[]
-        for arg in args do
-          argExprs := argExprs.push (← elabTerm arg varMap)
-        return mkAppN fvar argExprs
+  | .opHole n args =>
+      let fvar := varMap.get! (mkOpName n)
+      let mut argExprs := #[]
+      for arg in args do
+        argExprs := argExprs.push (← elabTerm arg varMap)
+      return mkAppN fvar argExprs
 
-  partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
-    match expr with
-    | .lit l => do
-        elabTerm l varMap
+partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
+  match expr with
+  | .lit l => do
+      elabTerm l varMap
 
-    | .eq l r => do
-        let lExpr ← elabTerm l varMap
-        let rExpr ← elabTerm r varMap
-        mkEq lExpr rExpr
-    | .un _ e => do
-        let eExpr ← elabTempExpr e varMap
-        return mkApp (mkConst ``Not) eExpr
-    | .bin op l r =>
-        let lExpr ← elabTempExpr l varMap
-        let rExpr ← elabTempExpr r varMap
+  | .eq l r => do
+      let lExpr ← elabTerm l varMap
+      let rExpr ← elabTerm r varMap
+      mkEq lExpr rExpr
+  | .un _ e => do
+      let eExpr ← elabTempExpr e varMap
+      return mkApp (mkConst ``Not) eExpr
+  | .bin op l r =>
+      let lExpr ← elabTempExpr l varMap
+      let rExpr ← elabTempExpr r varMap
 
-        match op with
-        | .and =>
-            return mkApp2 (mkConst ``And) lExpr rExpr
-        | .or =>
-            return mkApp2 (mkConst ``Or) lExpr rExpr
-        | .imp =>
-            return Expr.forallE `_ lExpr rExpr .default
-    | .bind op idx body =>
-        let fvar := varMap.get! (mkVarName idx)
-        let bodyExpr ← elabTempExpr body varMap
+      match op with
+      | .and =>
+          return mkApp2 (mkConst ``And) lExpr rExpr
+      | .or =>
+          return mkApp2 (mkConst ``Or) lExpr rExpr
+      | .imp =>
+          return Expr.forallE `_ lExpr rExpr .default
+  | .bind op idx body =>
+      let fvar := varMap.get! (mkVarName idx)
+      let bodyExpr ← elabTempExpr body varMap
 
-        match op with
-        | .forallBind =>
-            mkForallFVars #[fvar] bodyExpr
+      match op with
+      | .forall =>
+          mkForallFVars #[fvar] bodyExpr
 
-        | .existsBind =>
-            let lambdaBody ← mkLambdaFVars #[fvar] bodyExpr
-            mkAppM ``Exists #[lambdaBody]
-end
+      | .exists =>
+          let lambdaBody ← mkLambdaFVars #[fvar] bodyExpr
+          mkAppM ``Exists #[lambdaBody]
 
 def elabTemplate (t : TSyntax `template) : MetaM Expr := do
   let e ← elabTemp t
@@ -305,20 +300,13 @@ elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
   let (_, s) ← (exprInfer e).run {}
   withRef tk <| discard <|
     withFullContext s fun varMap => do
-
-      -- 1. Translate the custom AST into a Lean Expr
       let leanExpr ← elabTempExpr e varMap
-
-      -- 2. Create a dummy goal using our new expression instead of True
       let dummyGoal ← mkFreshExprMVar leanExpr
-
-      -- 3. Log the goal state! This prints the variables above the line
-      -- and your fully formatted mathematical expression below the line.
       logInfo (MessageData.ofGoal dummyGoal.mvarId!)
 
       return leanExpr
 
-elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
+elab tk:"#test_stx " t:template : command => runTermElabM fun _ => do
   let e ← elabTemp t
   let (_, s) ← (exprInfer e).run {}
   withRef tk <| discard <|
@@ -333,3 +321,5 @@ elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
 #test_stx H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
 #test_stx ∀ x1, ∃ x2, H1 x1 → H2 x2
 #test_stx H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
+
+#test_stx ∀ x1 x2, H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
