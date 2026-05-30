@@ -7,6 +7,7 @@ open Lean Meta Elab Command Term
 /- Dictionary for -/
 structure templateState where
   typedVars : Std.HashMap Nat Expr := {}
+  typedConsts : Std.HashMap Nat Expr := {}
   typedOps : Std.HashMap Nat Expr := {}
 
 #check StateRefT'
@@ -21,6 +22,15 @@ def getVarType (idx : Nat) : TemplateM Expr := do
     modify fun s => { s with typedVars := s.typedVars.insert idx x}
     return x
 
+def getConstType (idx : Nat) : TemplateM Expr := do
+  let state ← get
+  match state.typedConsts.get? idx with
+  | some c => return c
+  | none =>
+    let x ← mkFreshExprMVar (← mkFreshTypeMVar)
+    modify fun s => {s with typedConsts := s.typedConsts.insert idx x}
+    return x
+
 /- This function is only for lookup and placeholder creation -/
 def getOpType (idx : Nat) : TemplateM Expr := do
   let state ← get
@@ -32,8 +42,10 @@ def getOpType (idx : Nat) : TemplateM Expr := do
     return f
 
 partial def termInfer : tempLit → TemplateM Unit
-  | .var idx =>
-      discard <| getVarType idx     -- Do the work and return nothing
+  | .var idx => do
+    discard <| getVarType idx
+  | .const idx => do
+      discard <| getConstType idx
   | .opHole idx args => do
       discard <| getOpType idx
       args.forM termInfer           -- Apply monadic action to each element of Array
@@ -41,6 +53,8 @@ partial def termInfer : tempLit → TemplateM Unit
 partial def termInfer' : tempLit → TemplateM Expr
   | .var idx =>
     getVarType idx
+  | .const idx =>
+    getConstType idx
   | .opHole idx args => do
     let state ← get
     let argTypes ← args.mapM termInfer'
@@ -135,6 +149,9 @@ elab tk:"#test_inference" b:("!")? t:template : command => runTermElabM fun _ =>
     for (k,v) in s.typedVars.toList do
       let ty ← instantiateMVars v
       out := out ++ s!"x{k} : {ty}\n"
+    for (k,v) in s.typedConsts.toList do
+      let ty ← instantiateMVars v
+      out := out ++ s!"c{k} : {ty}\n"
     for (k,v) in s.typedOps.toList do
       let ty ← instantiateMVars v
       out := out ++ s!"H{k} : {ty}\n"
@@ -145,36 +162,25 @@ elab tk:"#test_inference" b:("!")? t:template : command => runTermElabM fun _ =>
     for (k,v) in s.typedVars.toList do
       let ty ← instantiateMVars v
       out := out ++ s!"x{k} : {ty}\n"
+    for (k,v) in s.typedConsts.toList do
+      let ty ← instantiateMVars v
+      out := out ++ s!"c{k} : {ty}\n"
     for (k,v) in s.typedOps.toList do
       let ty ← instantiateMVars v
       out := out ++ s!"H{k} : {ty}\n"
 
     withRef tk (logInfo m!"{out}")
 
-#test_inference H1 x1 x2 = H1 x2 x1
-#test_inference H1 x1 x2 = H2 x1 x2
-#test_inference H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
-#test_inference ∀ x1, ∃ x2, H1 x1 → H2 x2
+-- #test_inference H1 x1 x2 = H1 x2 x1
+-- #test_inference H1 x1 x2 = H2 x1 x2
+-- #test_inference H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
+-- #test_inference ∀ x1, ∃ x2, H1 x1 → H2 x2
 
-#test_inference! H1 x1 x2
-#test_inference! H1 x1 x2 = H1 x2 x1
-#test_inference! H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
-#test_inference! ∀ x1, ∃ x2, H1 x1 → H2 x2
-#test_inference! H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
-
-partial def withTypeVars {α : Type} (mvars : List MVarId)
-    (k : Std.HashMap MVarId Expr → MetaM α): MetaM α := do
-  let rec go (xs : List MVarId)
-    (ctx : Std.HashMap MVarId Expr) := do
-    match xs with
-    | [] =>
-        k ctx
-    | mv :: rest =>
-      withLocalDecl (mkTypeName (ctx.size + 1))
-        BinderInfo.default (mkSort levelOne)
-        fun fvar => do
-          go rest (ctx.insert mv fvar)
-  go mvars {}
+-- #test_inference! H1 x1 x2
+-- #test_inference! H1 x1 x2 = H1 x2 x1
+-- #test_inference! H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
+-- #test_inference! ∀ x1, ∃ x2, H1 x1 → H2 x2
+-- #test_inference! H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
 
 def collectTypeMVars (s : templateState) : MetaM (List MVarId) := do
   let mut out : List MVarId := []
@@ -183,11 +189,33 @@ def collectTypeMVars (s : templateState) : MetaM (List MVarId) := do
     let ty ← instantiateMVars ty
     out := out ++ (← getMVars ty).toList
 
+  for (_, ty) in s.typedConsts.toList do
+    let ty ← instantiateMVars ty
+    out := out ++ (← getMVars ty).toList
+
   for (_, ty) in s.typedOps.toList do
     let ty ← instantiateMVars ty
     out := out ++ (← getMVars ty).toList
 
   return out.eraseDups
+
+structure TemplateContext where
+  termMap : Std.HashMap Name Expr := {}
+  typeParams : Array Expr := #[]
+  vars : Array (Nat × Expr) := #[]
+  consts : Array (Nat × Expr) := #[]
+  ops : Array (Nat × Expr) := #[]
+
+def insertSortedByIdx (x : Nat × Expr) : List (Nat × Expr) → List (Nat × Expr)
+  | [] => [x]
+  | y :: ys =>
+      if x.1 <= y.1 then
+        x :: y :: ys
+      else
+        y :: insertSortedByIdx x ys
+
+def sortByIdx (xs : List (Nat × Expr)) : List (Nat × Expr) :=
+  xs.foldr insertSortedByIdx []
 
 -- elab "#test_ctx" t:template : command => runTermElabM fun _ => do
 --   let e ← elabTemp t
@@ -202,26 +230,47 @@ def collectTypeMVars (s : templateState) : MetaM (List MVarId) := do
 
 --       return mkConst ``True
 
--- A helper to declare the term variables (x's and H's) once types are ready
-def withTermVars {α : Type} (vars : List (Nat × Expr)) (ops : List (Nat × Expr))
+-- A helper to declare the term variables (x's, c's and H's) once types are ready
+partial def withTermVars {α : Type} (vars : List (Nat × Expr)) (const : List (Nat × Expr))
+    (ops : List (Nat × Expr))
     (typeMap : Std.HashMap MVarId Expr)
-    (k : Std.HashMap Name Expr → MetaM α) : MetaM α := do
+    (typeParams : Array Expr)
+    (k : TemplateContext → MetaM α) : MetaM α := do
   let rec go
       (vList : List (Nat × Expr))
+      (cList : List (Nat × Expr))
       (oList : List (Nat × Expr))
-      (ctx : Std.HashMap Name Expr) : MetaM α := do
-    match vList, oList with
-    | (idx, rawType) :: vRest, _ =>
-        let name := mkVarName idx
-        let abstractType ← instantiateMVars rawType
+      (ctx : TemplateContext) : MetaM α := do
+    match vList, cList, oList with
+    -- While there is an untyped variable
+    | (idx, rawType) :: vRest, _, _=>
+        let name := mkVarName idx -- Name it
+        let abstractType ← instantiateMVars rawType -- Assume it has some type
 
         let concreteType := abstractType.replace fun e =>
           match e with | .mvar mvarId => typeMap.get? mvarId | _ => none
 
         withLocalDecl name BinderInfo.default concreteType fun fvar => do
-          go vRest oList (ctx.insert name fvar)
+          go vRest cList oList
+            { ctx with
+              termMap := ctx.termMap.insert name fvar
+              vars := ctx.vars.push (idx, fvar) }
 
-    | [], (idx, rawType) :: oRest =>
+    | [], (idx, rawType) :: cRest, _ =>
+        let name := mkConstName idx
+        let abstractType ← instantiateMVars rawType
+
+        let concreteType := abstractType.replace fun e =>
+          match e with
+          | .mvar mvarId => typeMap.get? mvarId
+          | _ => none
+        withLocalDecl name BinderInfo.default concreteType fun fvar => do
+          go [] cRest oList
+            { ctx with
+              termMap := ctx.termMap.insert name fvar
+              consts := ctx.consts.push (idx, fvar) }
+
+    | [], [], (idx, rawType) :: oRest =>
         let name := mkOpName idx
         let abstractType ← instantiateMVars rawType
 
@@ -229,39 +278,60 @@ def withTermVars {α : Type} (vars : List (Nat × Expr)) (ops : List (Nat × Exp
           match e with | .mvar mvarId => typeMap.get? mvarId | _ => none
 
         withLocalDecl name BinderInfo.default concreteType fun fvar => do
-          go [] oRest (ctx.insert name fvar)
+          go [] [] oRest
+            { ctx with
+              termMap := ctx.termMap.insert name fvar
+              ops := ctx.ops.push (idx, fvar) }
 
-    | [], [] => k ctx
+    | [], [], [] => k ctx
+  go (sortByIdx vars) (sortByIdx const) (sortByIdx ops) { typeParams := typeParams }
 
-  go vars ops {}
+partial def withTypeVars {α : Type} (mvars : List MVarId)
+    (k : Std.HashMap MVarId Expr → Array Expr → MetaM α): MetaM α := do
+  let rec go (xs : List MVarId)
+    (ctx : Std.HashMap MVarId Expr)
+    (typeParams : Array Expr) := do
+    match xs with
+    | [] =>
+        k ctx typeParams
+    | mv :: rest =>
+      withLocalDecl (mkTypeName (typeParams.size + 1))
+        BinderInfo.implicit (mkSort levelOne)
+        fun fvar => do
+          go rest (ctx.insert mv fvar) (typeParams.push fvar)
+  go mvars {} #[]
 
 def withFullContext {α : Type} (s : templateState)
-    (k : Std.HashMap Name Expr → MetaM α) : MetaM α := do
+    (k : TemplateContext → MetaM α) : MetaM α := do
+    -- This k business is continuation (used to chain function calls, so that they all happen sequentially... Basically leaving room for the actual elaboration, because this only builds context)
   let mvars ← collectTypeMVars s
-  withTypeVars mvars fun typeMap => do
-    withTermVars s.typedVars.toList s.typedOps.toList typeMap fun varMap => do
-      k varMap
+  withTypeVars mvars fun typeMap typeParams => do
+    withTermVars s.typedVars.toList s.typedConsts.toList s.typedOps.toList typeMap typeParams fun ctx => do
+      k ctx
 
-partial def elabTerm (lit : tempLit) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
+partial def elabTempTerm (lit : tempLit) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
   match lit with
   | .var k =>
       return varMap.get! (mkVarName k)
+
+  | .const k =>
+      return varMap.get! (mkConstName k)
 
   | .opHole n args =>
       let fvar := varMap.get! (mkOpName n)
       let mut argExprs := #[]
       for arg in args do
-        argExprs := argExprs.push (← elabTerm arg varMap)
+        argExprs := argExprs.push (← elabTempTerm arg varMap)
       return mkAppN fvar argExprs
 
 partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
   match expr with
   | .lit l => do
-      elabTerm l varMap
+      elabTempTerm l varMap
 
   | .eq l r => do
-      let lExpr ← elabTerm l varMap
-      let rExpr ← elabTerm r varMap
+      let lExpr ← elabTempTerm l varMap
+      let rExpr ← elabTempTerm r varMap
       mkEq lExpr rExpr
   | .un _ e => do
       let eExpr ← elabTempExpr e varMap
@@ -292,16 +362,19 @@ partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : Me
 def elabTemplate (t : TSyntax `template) : MetaM Expr := do
   let e ← elabTemp t
   let (_, s) ← (exprInfer e).run {}
-  withFullContext s fun varMap => do
-    elabTempExpr e varMap
+  withFullContext s fun ctx => do
+    elabTempExpr e ctx.termMap
 
 elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
   let e ← elabTemp t
   let (_, s) ← (exprInfer e).run {}
   withRef tk <| discard <|
-    withFullContext s fun varMap => do
-      let leanExpr ← elabTempExpr e varMap
+    withFullContext s fun ctx => do
+      let leanExpr ← elabTempExpr e ctx.termMap
       let dummyGoal ← mkFreshExprMVar leanExpr
+      let roleInfo :=
+        s!"roles vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
+      logInfo m!"{roleInfo}"
       logInfo (MessageData.ofGoal dummyGoal.mvarId!)
 
       return leanExpr
@@ -310,14 +383,21 @@ elab tk:"#test_stx " t:template : command => runTermElabM fun _ => do
   let e ← elabTemp t
   let (_, s) ← (exprInfer e).run {}
   withRef tk <| discard <|
-    withFullContext s fun varMap => do
-      let leanExpr ← elabTempExpr e varMap
+    withFullContext s fun ctx => do
+      let leanExpr ← elabTempExpr e ctx.termMap
       let dummyGoal ← mkFreshExprMVar leanExpr
+      let roleInfo :=
+        s!"roles vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
+      logInfo m!"{roleInfo}"
       logInfo (MessageData.ofGoal dummyGoal.mvarId!)
       return leanExpr
 
 #test_stx H1 x1 x2
 #test_stx H1 x1 x2 = H1 x2 x1
+
+#test_stx H1 c1 x1 = x1
+#test_stx H1 x1 c1 = x1
+
 #test_stx H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
 #test_stx ∀ x1, ∃ x2, H1 x1 → H2 x2
 #test_stx H1 x1 x2 = x1 ∨ H1 x1 x2 = x2

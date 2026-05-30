@@ -14,12 +14,14 @@ def stxCheck (id : Syntax) (pfx : String) : MetaM Nat := do
 
 
 def mkVarName (idx : Nat) := Name.mkSimple s!"x{idx}"
+def mkConstName (idx : Nat) := Name.mkSimple s!"c{idx}"
 def mkOpName (idx : Nat) := Name.mkSimple s!"H{idx}"
 def mkTypeName (idx : Nat) := Name.mkSimple s!"T{idx}"
 
 -- Abstract Syntax Tree
 
 inductive tempLit
+  | const : Nat → tempLit
   | var : Nat → tempLit
   | opHole : Nat → Array tempLit → tempLit
   --| typeHole : Nat → tempLit
@@ -98,6 +100,9 @@ mutual    -- Functions that call each other
       if nameStr.startsWith "x" then
         let k ← stxCheck id "x"
         return tempLit.var k
+      else if nameStr.startsWith "c" then
+        let k ← stxCheck id "c"
+        return tempLit.const k
       -- H"num" -> Operator Hole
       else if nameStr.startsWith "H" then
         let n ← stxCheck id "H"
@@ -184,7 +189,7 @@ partial def elabTemp : Syntax → MetaM tempExpr
     match e with
     | .opHole _ _ =>
       return .lit e
-    | .var _ =>
+    | .var _  | .const _=>
       throwErrorAt lit "Only operator applications can be Propositions"
   | `(template| $lhs:temp_lit = $rhs:temp_lit) => do
     let lExpr ← elabLit lhs
@@ -221,6 +226,9 @@ partial def delabAtom (l : tempLit) : MetaM (TSyntax `temp_lit_atom) := do
   | .var idx => do
     let name := mkIdent (mkVarName idx)
     `(temp_lit_atom| $name:ident)
+  | .const idx => do
+    let name := mkIdent (mkConstName idx)
+    `(temp_lit_atom| $name:ident)
   | t@(.opHole ..) => do
     let inner ← delabLit t
     `(temp_lit_atom| ($inner:temp_lit))
@@ -228,6 +236,9 @@ partial def delabAtom (l : tempLit) : MetaM (TSyntax `temp_lit_atom) := do
 partial def delabLit (l : tempLit) : MetaM (TSyntax `temp_lit) := do
   match l with
   | t@(.var _) => do
+    let stx ← delabAtom t
+    `(temp_lit| $stx:temp_lit_atom)
+  | t@(.const _) => do
     let stx ← delabAtom t
     `(temp_lit| $stx:temp_lit_atom)
   | .opHole idx args => do
@@ -269,3 +280,5 @@ elab tk:"#test_delab " t:template : command =>
     withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
 
 #test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+
+-- TODO : Add to DSL : Constants (C1, C2, ...), iff (↔)

@@ -176,14 +176,15 @@ end vars
 
 def instantiateTemplate (expr : tempExpr) (subst : Array Expr) : TermElabM Expr := do
   let (_, s) ← (exprInfer expr).run {}
-  let (arity, template) ← withFullContext s fun varMap => do
-    let e₀ ← elabTempExpr expr varMap
+  let (arity, template) ← withFullContext s fun ctx => do
+    let e₀ ← elabTempExpr expr ctx.termMap
     let e₁ ← instantiateMVars e₀
-    -- withRef tk <| logInfo s!"{e₁}"
-    let (vars, _) ← fvarSorter e₁
-    let e₂ ← Lean.Meta.mkForallFVars (vars.map Expr.fvar) e₁
-    let (fvarids, template) ← abstractTemplate e₂
-    pure (fvarids.size, template)
+    -- logInfo s!"{e₁}"
+    let e₂ ← Lean.Meta.mkForallFVars (ctx.vars.map (fun p => p.2)) e₁
+    let params := ctx.typeParams ++ (ctx.consts.map (fun p => p.2)) ++ (ctx.ops.map (fun p => p.2))
+    let template := e₂.abstract params
+    -- logInfo s!"{template}"
+    pure (params.size, template)
   if subst.size != arity then
     throwError m!"Arity mismatch! Template has {arity} variables, but input has {subst.size} arguments."
   let result := template.instantiateRev subst
@@ -208,22 +209,24 @@ elab tk:"#inst_temp" t:template "with" "#[" args:term,* "]" : command =>
 
 #inst_temp H1 x1 x2 = H1 x2 x1 with #[Nat, _, HMul.hMul]
 
+#inst_temp H1 x1 c1 = x1 with #[Nat, _, 0, HAdd.hAdd]
+
 #inst_temp H1 x1 x2 = H1 x2 x1 with #[Nat,_, HAdd.hAdd]
 
 #inst_temp H1 x1 (H1 x2 x3) = H1 (H1 x1 x2) x3 with #[Nat,_, HMul.hMul]
 
 #show Int.neg_add
-#inst_temp H2 (H1 x1 x2) = H1 (H2 x1) (H2 x2) with #[Int,  Neg.neg, HAdd.hAdd]
+#inst_temp H2 (H1 x1 x2) = H1 (H2 x1) (H2 x2) with #[Int, HAdd.hAdd, Neg.neg]
 
 #inst_temp H1 x1 x2 = H1 x2 x1 with #[Vector Int _, _, HAdd.hAdd]
 
 #check @Vector.add_comm Int
-#inst_temp H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
-  with #[_, Int, HAdd.hAdd, Vector Int _, _, HAdd.hAdd]
-
-#inst_temp H1 x1 x2 = H1 x2 x1 → H2 x3 x4 = H2 x4 x3
-  with #[Int, Int, Int, HAdd.hAdd, _, HAdd.hAdd]
-
+#inst_temp ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+  with #[Int, Vector Int _, _, _, HAdd.hAdd, HAdd.hAdd]
 
 -- There has to be a way to give some arguments
-#inst_temp H1 x1 x2 = x2 with #[Int, _ , HMul.hMul]
+#inst_temp H1 c1 x2 = x2 with #[Int, _ , 1, HMul.hMul]
+
+#inst_temp H1 c1 x1 = x1 with #[Nat, Nat, 1, HMul.hMul]
+
+#inst_temp H1 c1 x1 = c1 with #[Nat, Nat, 0, HAdd.hAdd]
