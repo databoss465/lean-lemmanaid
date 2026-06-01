@@ -6,8 +6,10 @@ open Lean Meta Elab Command Term
 
 structure AbstractionState where
   nextVar : Nat := 1
+  nextConst : Nat := 1
   nextOp : Nat := 1
   vars : Std.HashMap FVarId Nat := {}
+  consts : Std.HashMap Expr Nat := {}
   ops : Std.HashMap Expr Nat := {}
 
 abbrev AbstractionM := StateRefT AbstractionState MetaM
@@ -34,6 +36,19 @@ def getOpIdx (head : Expr) : AbstractionM Nat := do
       modify fun s => { s with
         nextOp := idx + 1
         ops := s.ops.insert head idx
+      }
+      return idx
+
+def getConstIdx (c : Expr) : AbstractionM Nat := do
+  let c := c.consumeMData
+  let s ← get
+  match s.consts.get? c with
+  | some idx => return idx
+  | none =>
+      let idx := s.nextConst
+      modify fun s => { s with
+        nextConst := idx + 1
+        consts := s.consts.insert c idx
       }
       return idx
 
@@ -133,6 +148,19 @@ mutual
 
   partial def abstractTerm (e : Expr) : AbstractionM tempLit := do
     let e := e.consumeMData
+
+    -- If a subterm is closed (no free vars/metavars/loose bvars) and is a term value
+    -- (not a function and not a type), treat it as an opaque constant hole `cN`.
+    --
+    -- This intentionally collapses elaborated numerals like `OfNat.ofNat Nat 0 inst...`
+    -- and constructor noise like `Rat.mk ...` into a single `cN`, while preserving
+    -- structure for terms that actually depend on variables (e.g. `x + (4^2*3-2)`).
+    if !(e.hasFVar || e.hasMVar || e.hasLooseBVars) then
+      if !(← liftM <| isProp e) then
+        let ty ← liftM <| whnf (← inferType e)
+        if !ty.isForall && !ty.isSort then
+          return .const (← getConstIdx e)
+
     match e with
     | .fvar fvarId =>
         if ← liftM <| isProp e then
@@ -150,7 +178,14 @@ mutual
             let argLits ← explArgs.mapM abstractTerm
             return .opHole (← getOpIdx fn) argLits
     | .const .. =>
-        return .opHole (← getOpIdx e) #[]
+        if ← liftM <| isProp e then
+          return .opHole (← getOpIdx e) #[]
+        let ty ← liftM <| whnf (← inferType e)
+        if ty.isForall then
+          return .opHole (← getOpIdx e) #[]
+        if ty.isSort then
+          return .opHole (← getOpIdx e) #[]
+        return .const (← getConstIdx e)
     | .mvar .. =>
         throwError m!"Unsupported metavariable in term abstraction: {e}"
     | .bvar .. =>
@@ -164,31 +199,42 @@ mutual
     | .sort .. =>
         throwError m!"Unsupported sort in term abstraction: {e}"
     | .lit .. =>
-        throwError m!"Unsupported literal in term abstraction: {e}"
+        return .const (← getConstIdx e)
     | .proj .. =>
         throwError m!"Unsupported projection in term abstraction: {e}"
     | .mdata _ e' =>
         abstractTerm e'
 end
 
--- def buildTemplate (e : Expr) : MetaM tempExpr := do
---   let mut vars := 0
---   let mut Ops := 0
---   match e.consumeMData with
---   | .app .. => do
---     match e.getAppFn with
---     | .const ``Eq _ => do sorry
---     | .const ``And _ => do sorry
---     | .const ``Or _ => do sorry
---     | _ => do sorry
---   | .forallE _ _ _ _ => do sorry
---   | .fvar _ => do sorry
---   | _ => throwError m!"oops"
+/--
+Strip only the *outer* explicit term binders of a theorem type before calling `abstractProp`.
+
+This intentionally does **not** recurse into subexpressions: it only peels a prefix of
+`forallE` binders whose domain is not `Prop`. Once the remaining body is a `Prop`
+(or the binder is not an explicit term binder), it delegates to `abstractProp`,
+which will still keep any quantifiers inside the proposition itself.
+-/
+partial def abstractProp' (e : Expr) : AbstractionM tempExpr := do
+  let rec go (e : Expr) : AbstractionM tempExpr := do
+    let e := e.consumeMData
+    match e with
+    | .forallE name type body bi =>
+        if ← liftM <| isProp type then
+          abstractProp e
+        else if bi == BinderInfo.default then
+          withAbstractedVar name bi type fun _idx fvar => do
+            go (body.instantiate1 fvar)
+        else
+          withIgnoredLocal name bi type fun fvar => do
+            go (body.instantiate1 fvar)
+    | _ =>
+        abstractProp e
+  go e
 
 elab tk:"#test_abs " id:ident : command => runTermElabM fun _ => do
   let name ← resolveGlobalConstNoOverload id
   let info ← getConstInfo name
   let type ← instantiateMVars info.type
-  let (template, _) ← (abstractProp type).run {}
+  let (template, _) ← (abstractProp' type).run {}
   let stx ← delabExpr template
   withRef tk <| logInfo m!"{stx}"

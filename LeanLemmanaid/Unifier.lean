@@ -41,23 +41,14 @@ def getOpType (idx : Nat) : TemplateM Expr := do
     modify fun s => { s with typedOps := s.typedOps.insert idx f}
     return f
 
-partial def termInfer : tempLit → TemplateM Unit
-  | .var idx => do
-    discard <| getVarType idx
-  | .const idx => do
-      discard <| getConstType idx
-  | .opHole idx args => do
-      discard <| getOpType idx
-      args.forM termInfer           -- Apply monadic action to each element of Array
-
-partial def termInfer' : tempLit → TemplateM Expr
+partial def termInfer : tempLit → TemplateM Expr
   | .var idx =>
     getVarType idx
   | .const idx =>
     getConstType idx
   | .opHole idx args => do
     let state ← get
-    let argTypes ← args.mapM termInfer'
+    let argTypes ← args.mapM termInfer
     match state.typedOps.get? idx with
     | some T =>
       let outType ← mkFreshTypeMVar
@@ -73,21 +64,6 @@ partial def termInfer' : tempLit → TemplateM Expr
       modify fun s => { s with typedOps := s.typedOps.insert idx opType }
       return outType
 
-partial def naiveInfer : tempExpr → TemplateM Unit
-  | .lit l => do
-    termInfer l
-  | .eq l r => do
-    termInfer l
-    termInfer r
-  | .un _ e => do
-    naiveInfer e
-  | .bin _ el er => do
-    naiveInfer el
-    naiveInfer er
-  | .bind _ idx e => do
-    discard <| getVarType idx
-    naiveInfer e
-
 partial def setToProp (e : Expr) : TemplateM Unit := do
   let e ← instantiateMVars e
   match e with
@@ -97,31 +73,14 @@ partial def setToProp (e : Expr) : TemplateM Unit := do
       unless ← isDefEq e (.sort .zero) do
         throwError "Expected Prop"
 
-partial def notSoNaiveInfer : tempExpr → TemplateM Unit
-  | .lit l => do
-      discard <| termInfer' l
-  | .eq l r => do
-      let tl ← termInfer' l
-      let tr ← termInfer' r
-      unless ← isDefEq tl tr do
-        throwError "Equality type mismatch"
-  | .un _ e => do
-    notSoNaiveInfer e
-  | .bin _ el er => do
-    notSoNaiveInfer el
-    notSoNaiveInfer er
-  | .bind _ idx e => do
-    discard <| getVarType idx
-    notSoNaiveInfer e
-
 partial def exprInfer : tempExpr → TemplateM Expr
   | .lit l => do
-      let t ← termInfer' l
+      let t ← termInfer l
       setToProp t
       return mkSort levelZero
   | .eq l r => do
-      let tl ← termInfer' l
-      let tr ← termInfer' r
+      let tl ← termInfer l
+      let tr ← termInfer r
       unless ← isDefEq tl tr do
         throwError "Equality type mismatch"
       return mkSort levelZero
@@ -140,47 +99,6 @@ partial def exprInfer : tempExpr → TemplateM Expr
     let t ← exprInfer e
     setToProp t
     return mkSort levelZero
-
-elab tk:"#test_inference" b:("!")? t:template : command => runTermElabM fun _ => do
-  let e ← elabTemp t
-  if b.isSome then
-    let (_, s) ← (exprInfer e).run {}
-    let mut out := ""
-    for (k,v) in s.typedVars.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"x{k} : {ty}\n"
-    for (k,v) in s.typedConsts.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"c{k} : {ty}\n"
-    for (k,v) in s.typedOps.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"H{k} : {ty}\n"
-     withRef tk (logInfo m!"{out}")
-  else
-    let (_, s) ← (naiveInfer e).run {}
-    let mut out := ""
-    for (k,v) in s.typedVars.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"x{k} : {ty}\n"
-    for (k,v) in s.typedConsts.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"c{k} : {ty}\n"
-    for (k,v) in s.typedOps.toList do
-      let ty ← instantiateMVars v
-      out := out ++ s!"H{k} : {ty}\n"
-
-    withRef tk (logInfo m!"{out}")
-
--- #test_inference H1 x1 x2 = H1 x2 x1
--- #test_inference H1 x1 x2 = H2 x1 x2
--- #test_inference H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
--- #test_inference ∀ x1, ∃ x2, H1 x1 → H2 x2
-
--- #test_inference! H1 x1 x2
--- #test_inference! H1 x1 x2 = H1 x2 x1
--- #test_inference! H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
--- #test_inference! ∀ x1, ∃ x2, H1 x1 → H2 x2
--- #test_inference! H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
 
 def collectTypeMVars (s : templateState) : MetaM (List MVarId) := do
   let mut out : List MVarId := []
@@ -206,29 +124,17 @@ structure TemplateContext where
   consts : Array (Nat × Expr) := #[]
   ops : Array (Nat × Expr) := #[]
 
+-- Functions to sort by first component
 def insertSortedByIdx (x : Nat × Expr) : List (Nat × Expr) → List (Nat × Expr)
   | [] => [x]
   | y :: ys =>
-      if x.1 <= y.1 then
+      if x.1 ≤ y.1 then
         x :: y :: ys
       else
         y :: insertSortedByIdx x ys
 
 def sortByIdx (xs : List (Nat × Expr)) : List (Nat × Expr) :=
   xs.foldr insertSortedByIdx []
-
--- elab "#test_ctx" t:template : command => runTermElabM fun _ => do
---   let e ← elabTemp t
---   let (_, s) ← (exprInfer e).run {}
---   let mvars ← collectTypeMVars s
-
---   discard <|
---     withTypeVars mvars fun _ => do
---       let dummyGoal ← mkFreshExprMVar (mkConst ``True)
---       let goalStr ← Lean.Meta.ppGoal dummyGoal.mvarId!
---       logInfo goalStr
-
---       return mkConst ``True
 
 -- A helper to declare the term variables (x's, c's and H's) once types are ready
 partial def withTermVars {α : Type} (vars : List (Nat × Expr)) (const : List (Nat × Expr))
@@ -372,24 +278,11 @@ elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
     withFullContext s fun ctx => do
       let leanExpr ← elabTempExpr e ctx.termMap
       let dummyGoal ← mkFreshExprMVar leanExpr
-      let roleInfo :=
-        s!"roles vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
-      logInfo m!"{roleInfo}"
+      let holeInfo :=
+        s!"holes vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
+      logInfo m!"{holeInfo}"
       logInfo (MessageData.ofGoal dummyGoal.mvarId!)
 
-      return leanExpr
-
-elab tk:"#test_stx " t:template : command => runTermElabM fun _ => do
-  let e ← elabTemp t
-  let (_, s) ← (exprInfer e).run {}
-  withRef tk <| discard <|
-    withFullContext s fun ctx => do
-      let leanExpr ← elabTempExpr e ctx.termMap
-      let dummyGoal ← mkFreshExprMVar leanExpr
-      let roleInfo :=
-        s!"roles vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
-      logInfo m!"{roleInfo}"
-      logInfo (MessageData.ofGoal dummyGoal.mvarId!)
       return leanExpr
 
 #test_stx H1 x1 x2
@@ -402,4 +295,4 @@ elab tk:"#test_stx " t:template : command => runTermElabM fun _ => do
 #test_stx ∀ x1, ∃ x2, H1 x1 → H2 x2
 #test_stx H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
 
-#test_stx ∀ x1 x2, H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
+#test_stx ∀ x1 x2, H1 x1 x2 = c1 ∨ H1 x1 x2 = c2

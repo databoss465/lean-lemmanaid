@@ -279,6 +279,4 @@ elab tk:"#test_delab " t:template : command =>
     let t' ← delabExpr e
     withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
 
-#test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
-
--- TODO : Add to DSL : Constants (C1, C2, ...), iff (↔)
+-- #test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
