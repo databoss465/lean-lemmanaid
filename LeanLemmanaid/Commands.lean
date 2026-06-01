@@ -203,6 +203,7 @@ def instantiateTemplate (expr : tempExpr) (subst : Array Expr) : TermElabM Expr 
 elab tk:"#inst_temp" t:template "with" "#[" args:term,* "]" : command =>
   liftTermElabM do
     let expr ← elabTemp t
+    logInfo s!"{expr}"
     let subst ← args.getElems.mapM (elabTerm · none)
     let thm ← instantiateTemplate expr subst
     withRef tk <| logInfo m!"{thm}"

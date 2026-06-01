@@ -245,7 +245,6 @@ partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : Me
   | .bin op l r =>
       let lExpr ← elabTempExpr l varMap
       let rExpr ← elabTempExpr r varMap
-
       match op with
       | .and =>
           return mkApp2 (mkConst ``And) lExpr rExpr
@@ -253,6 +252,8 @@ partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : Me
           return mkApp2 (mkConst ``Or) lExpr rExpr
       | .imp =>
           return Expr.forallE `_ lExpr rExpr .default
+      | .iff =>
+          return mkApp2 (mkConst ``Iff) lExpr rExpr
   | .bind op idx body =>
       let fvar := varMap.get! (mkVarName idx)
       let bodyExpr ← elabTempExpr body varMap

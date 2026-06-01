@@ -27,6 +27,20 @@ inductive tempLit
   --| typeHole : Nat → tempLit
 deriving Repr
 
+partial def tempLit.toString : tempLit → String
+  | .const n =>
+      s!"c{n}"
+  | .var n =>
+      s!"x{n}"
+  | .opHole n args =>
+      if args.isEmpty then
+        s!"?H{n}"
+      else
+        s!"(?H{n} {" ".intercalate (args.toList.map tempLit.toString)})"
+
+instance : ToString tempLit where
+  toString := tempLit.toString
+
 inductive tempUnOp
  | not
 
@@ -39,19 +53,22 @@ instance : Repr tempUnOp where
   |.not, _ => "¬"
 
 inductive tempBinOp
- | and |or | imp
+ | and |or | imp | iff
 
--- instance : ToString tempBinOp where
---   toString
---     | .and => "and"
---     | .or  => "or"
---     | .imp => "imp"
+instance : ToString tempBinOp where
+  toString
+    | .and => "and"
+    | .or  => "or"
+    | .imp => "imp"
+    | .iff => "iff"
 
 instance : Repr tempBinOp where
   reprPrec
     | .and, _ => "And"
     | .or,  _ => "Or"
     | .imp, _ => "Imp"
+    | .iff, _ => "Iff"
+
 
 inductive tempBinder
   | forall | exists
@@ -61,6 +78,11 @@ instance : Repr tempBinder where
   | .forall, _ => "Forall"
   | .exists, _ => "Exists"
 
+instance : ToString tempBinder where
+  toString
+  | .forall => "forall"
+  | .exists => "exists"
+
 
 inductive tempExpr
   | lit : tempLit → tempExpr
@@ -69,6 +91,21 @@ inductive tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
   | bind : tempBinder → Nat → tempExpr → tempExpr
 deriving Repr
+
+partial def tempExpr.toString : tempExpr → String
+  | .lit l =>
+      l.toString
+  | .eq l₁ l₂ =>
+      s!"({l₁} = {l₂})"
+  | .un op e =>
+      s!"({op} {tempExpr.toString e})"
+  | .bin op e₁ e₂ =>
+      s!"({tempExpr.toString e₁} {op} {tempExpr.toString e₂})"
+  | .bind b n e =>
+      s!"({b} {n}. {tempExpr.toString e})"
+
+instance : ToString tempExpr where
+  toString := tempExpr.toString
 
 -- structure template where
 --   opHoles : Array Nat
@@ -133,14 +170,6 @@ mutual    -- Functions that call each other
     | _ => throwUnsupportedSyntax
 end
 
-declare_syntax_cat temp_unop
-syntax "not " : temp_unop
-syntax "¬ " : temp_unop
-
-def elabUnOp : Syntax → MetaM tempUnOp
-  | `(temp_unop| not) => return .not
-  | _ => throwUnsupportedSyntax
-
 declare_syntax_cat temp_binop
 
 syntax "and" : temp_binop
@@ -152,10 +181,22 @@ syntax " ∨ " : temp_binop
 syntax " imp " : temp_binop
 syntax " → " : temp_binop
 
+syntax " iff " : temp_binop
+syntax " ↔ " : temp_binop
+
 def elabBinOp : Syntax → MetaM tempBinOp
   | `(temp_binop| and) | `(temp_binop| ∧) => return .and
   | `(temp_binop| or)  | `(temp_binop| ∨)=> return .or
   | `(temp_binop| imp) | `(temp_binop| →)=> return .imp
+  | `(temp_binop| iff) | `(temp_binop| ↔)=> return .iff
+  | _ => throwUnsupportedSyntax
+
+declare_syntax_cat temp_unop
+syntax "not " : temp_unop
+syntax "¬" : temp_unop
+
+def elabUnOp : Syntax → MetaM tempUnOp
+  | `(temp_unop| not) | `(temp_unop| ¬) => return .not
   | _ => throwUnsupportedSyntax
 
 declare_syntax_cat temp_binder
@@ -176,10 +217,10 @@ declare_syntax_cat template
 syntax temp_lit " = " temp_lit : template              -- Equality propositions
 syntax temp_lit : template                             -- Some literals, can be lemmas (Relational propositions)
 
-syntax temp_unop template : template                  -- Not
-syntax template temp_binop template : template       -- And/Or/Implies
-syntax temp_binder ident ", " template : template     -- Forall/Exists
-syntax temp_binder ident+ ", " template : template
+syntax:50 temp_unop template:51 : template              -- Not
+syntax:35 template:36 temp_binop template:35 : template     -- And/Or/Implies
+syntax temp_binder ident ", " template:10 : template     -- Forall/Exists
+syntax temp_binder ident+ ", " template:10 : template
 
 syntax "(" template ")" : template                    -- Grouping
 
@@ -195,15 +236,16 @@ partial def elabTemp : Syntax → MetaM tempExpr
     let lExpr ← elabLit lhs
     let rExpr ← elabLit rhs
     return .eq lExpr rExpr
-  | `(template| $u:temp_unop $e:template) => do
-      let uExpr ← elabUnOp u
-      let eExpr ← elabTemp e
-      return .un uExpr eExpr
   | `(template| $lhs:template $bin:temp_binop $rhs:template) => do
       let binExpr ← elabBinOp bin
       let lExpr ← elabTemp lhs
       let rExpr ← elabTemp rhs
       return .bin binExpr lExpr rExpr
+  | `(template| $u:temp_unop $e:template) => do
+      let uExpr ← elabUnOp u
+      let eExpr ← elabTemp e
+      return .un uExpr eExpr
+
   | `(template| $b:temp_binder $var:ident , $e:template) => do
       let binderExpr ← elabBinder b
       let varIdx ← stxCheck var "x"
@@ -266,6 +308,7 @@ def delabExpr : tempExpr → MetaM (TSyntax `template)
     | .and => `(template| $lStx:template ∧ $rStx:template)
     | .or =>  `(template| $lStx:template ∨ $rStx:template)
     | .imp =>  `(template| $lStx:template → $rStx:template)
+    | .iff => `(template| $lStx:template ↔ $rStx:template)
   | .bind op idx e => do
     let name := mkIdent (mkVarName idx)
     let body ← delabExpr e

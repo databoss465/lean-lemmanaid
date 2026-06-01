@@ -40,9 +40,10 @@ def main : IO Unit :=
 
 #check Nat.add_div
 #test_abs Nat.add_div
+#check ite
 -- Want ite in DSL!
 -- #inst_temp H1 c1 x1 → H3(H2 x2 x3)x1 = H2(H2(H3 x2 x1)(H3 x3 x1))(H6(H5 x1(H2(H4 x2 x1)(H4 x3 x1)))c2 c1)
---   with #[Nat, Nat, Nat, Nat, Nat, 0, 1, LT.lt, HAdd.hAdd, HDiv.hDiv, HMod.hMod, LE.le, @ite Nat _ _ _ _]
+--   with #[Nat, Nat, Nat, Nat, Nat, 0, 1, LT.lt, HAdd.hAdd, HDiv.hDiv, HMod.hMod, LE.le, @ite Nat]
 
 #check Nat.div_add_mod
 #test_abs Nat.div_add_mod
@@ -56,3 +57,13 @@ def main : IO Unit :=
 
 #check Nat.lcm_dvd_lcm_mul_left_right
 #test_abs Nat.lcm_dvd_lcm_mul_left_right
+
+#check Function.comp_id
+#test_abs Function.comp_id
+-- #inst_temp H2 x1(H1) = x1
+--   with #[_, _, id, Function.comp]
+
+#check not_false_iff
+#test_abs not_false_iff
+#inst_temp ¬H1 ↔ H2
+  with #[False, True]

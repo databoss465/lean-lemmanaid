@@ -127,6 +127,11 @@ mutual
             unless explArgs.size == 2 do
               throwError m!"Expected disjunction to have 2 explicit arguments, got {explArgs.size}: {e}"
             return .bin .or (← abstractProp explArgs[0]!) (← abstractProp explArgs[1]!)
+        | .const ``Iff _ =>
+            let explArgs ← liftM <| explicitAppArgs fn args
+            unless explArgs.size == 2 do
+              throwError m!"Expected iff to have 2 explicit arguments, got {explArgs.size}: {e}"
+            return .bin .iff (← abstractProp explArgs[0]!) (← abstractProp explArgs[1]!)
         | .const ``Exists _ =>
             let explArgs ← liftM <| explicitAppArgs fn args
             unless explArgs.size == 1 do
