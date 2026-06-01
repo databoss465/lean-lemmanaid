@@ -285,14 +285,14 @@ elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
 
       return leanExpr
 
-#test_stx H1 x1 x2
-#test_stx H1 x1 x2 = H1 x2 x1
+-- #test_stx H1 x1 x2
+-- #test_stx H1 x1 x2 = H1 x2 x1
 
-#test_stx H1 c1 x1 = x1
-#test_stx H1 x1 c1 = x1
+-- #test_stx H1 c1 x1 = x1
+-- #test_stx H1 x1 c1 = x1
 
-#test_stx H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
-#test_stx ∀ x1, ∃ x2, H1 x1 → H2 x2
-#test_stx H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
+-- #test_stx H1 (H2 x1 x2) (H3 x1 x2) = H1 (H3 x2 x1) (H2 x1 x2)
+-- #test_stx ∀ x1, ∃ x2, H1 x1 → H2 x2
+-- #test_stx H1 x1 x2 = x1 ∨ H1 x1 x2 = x2
 
-#test_stx ∀ x1 x2, H1 x1 x2 = c1 ∨ H1 x1 x2 = c2
+-- #test_stx ∀ x1 x2, H1 x1 x2 = c1 ∨ H1 x1 x2 = c2

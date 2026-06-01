@@ -52,6 +52,29 @@ def getConstIdx (c : Expr) : AbstractionM Nat := do
       }
       return idx
 
+/- Returns two arrays, first is all the non-explicit binders, with explicit masked by generic mvars
+  and the second array is all the explicit arguments. We need them separately, because we need to build
+  their tempExpr -/
+partial def sortAppArgs (fn : Expr) (args : Array Expr) : MetaM (Array Expr × Array Expr) := do
+  let mut fnType ← inferType fn
+  let mut impl_masked := #[]
+  let mut expl := #[]
+  for arg in args do
+    let t ← whnf fnType
+    match t with
+    | .forallE _ _ body bi =>
+        if bi == BinderInfo.default then
+          expl := expl.push arg
+          -- let mask ← mkFreshExprMVar none
+          -- impl_masked := impl_masked.push mask
+        else
+          impl_masked := impl_masked.push arg
+        fnType := body.instantiate1 arg
+    | _ =>
+      throwError m!"Cannot read application arity for {fn}; expected a function type, got {t}"
+  return (impl_masked, expl)
+
+/- Returns an array of all the explicit binders of a function-/
 partial def explicitAppArgs (fn : Expr) (args : Array Expr) : MetaM (Array Expr) := do
   let mut fnType ← inferType fn
   let mut out := #[]
@@ -174,9 +197,11 @@ mutual
         | .const ``Eq _ | .const ``Not _ | .const ``And _ | .const ``Or _ | .const ``Exists _ =>
             throwError m!"Logical proposition used as a term: {e}"
         | _ =>
-            let explArgs ← liftM <| explicitAppArgs fn args
+            let (implArgs, explArgs) ← liftM <| sortAppArgs fn args
+            let partialAppFn := mkAppN fn implArgs
+            -- This will break if impl and expl binders are mixed!
             let argLits ← explArgs.mapM abstractTerm
-            return .opHole (← getOpIdx fn) argLits
+            return .opHole (← getOpIdx partialAppFn) argLits
     | .const .. =>
         if ← liftM <| isProp e then
           return .opHole (← getOpIdx e) #[]
