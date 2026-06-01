@@ -32,3 +32,27 @@ def main : IO Unit :=
 #test_abs Vector.add_comm
 #inst_temp ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
   with #[Int, Vector Int _, _, _, HAdd.hAdd, HAdd.hAdd]
+
+#check Nat.add_mul
+#test_abs Nat.add_mul
+#inst_temp H2(H1 x1 x2)x3 = H1(H2 x1 x3)(H2 x2 x3)
+  with #[Nat, _, HAdd.hAdd, HMul.hMul]
+
+#check Nat.add_div
+#test_abs Nat.add_div
+-- Want ite in DSL!
+-- #inst_temp H1 c1 x1 → H3(H2 x2 x3)x1 = H2(H2(H3 x2 x1)(H3 x3 x1))(H6(H5 x1(H2(H4 x2 x1)(H4 x3 x1)))c2 c1)
+--   with #[Nat, Nat, Nat, Nat, Nat, 0, 1, LT.lt, HAdd.hAdd, HDiv.hDiv, HMod.hMod, LE.le, @ite Nat _ _ _ _]
+
+#check Nat.div_add_mod
+#test_abs Nat.div_add_mod
+#inst_temp H4(H2 x2(H1 x1 x2))(H3 x1 x2) = x1
+  with #[Nat, _, _, _, _, HDiv.hDiv, HMul.hMul, HAdd.hAdd, HMod.hMod]
+
+#check Nat.eq_mul_of_div_eq_left
+#test_abs Nat.eq_mul_of_div_eq_left
+#inst_temp H1 x1 x2 → H2 x2 x1 = x3 → x2 = H3 x3 x1
+  with #[Nat, _, _, Dvd.dvd, HDiv.hDiv, HMul.hMul]
+
+#check Nat.lcm_dvd_lcm_mul_left_right
+#test_abs Nat.lcm_dvd_lcm_mul_left_right

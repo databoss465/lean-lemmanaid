@@ -256,10 +256,24 @@ partial def abstractProp' (e : Expr) : AbstractionM tempExpr := do
         abstractProp e
   go e
 
+def abstractionInfo (state : AbstractionState) : MetaM String := do
+  let mut out_str := "\n"
+  unless state.consts.toList.length = 0 do
+    out_str := out_str ++ "Constants\n"
+    for (e, idx) in state.consts do
+      let prettyExpr ← ppExpr e
+      out_str := out_str ++ s!"{prettyExpr} ↦ c{idx}\n"
+  out_str := out_str ++ "Operators\n"
+  for (e, idx) in state.ops do
+    let prettyExpr ← ppExpr e
+    out_str := out_str ++ s!"{prettyExpr} ↦ H{idx}\n"
+  return out_str
+
 elab tk:"#test_abs " id:ident : command => runTermElabM fun _ => do
   let name ← resolveGlobalConstNoOverload id
   let info ← getConstInfo name
   let type ← instantiateMVars info.type
-  let (template, _) ← (abstractProp' type).run {}
+  let (template, s) ← (abstractProp' type).run {}
+  let abstrInfo ← abstractionInfo s
   let stx ← delabExpr template
-  withRef tk <| logInfo m!"{stx}"
+  withRef tk <| logInfo m!"{stx}\n{abstrInfo}"
