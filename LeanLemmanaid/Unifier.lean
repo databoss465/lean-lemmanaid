@@ -141,12 +141,12 @@ partial def withTermVars {α : Type} (vars : List (Nat × Expr)) (const : List (
     (ops : List (Nat × Expr))
     (typeMap : Std.HashMap MVarId Expr)
     (typeParams : Array Expr)
-    (k : TemplateContext → MetaM α) : MetaM α := do
+    (k : TemplateContext → TermElabM α) : TermElabM α := do
   let rec go
       (vList : List (Nat × Expr))
       (cList : List (Nat × Expr))
       (oList : List (Nat × Expr))
-      (ctx : TemplateContext) : MetaM α := do
+      (ctx : TemplateContext) := do
     match vList, cList, oList with
     -- While there is an untyped variable
     | (idx, rawType) :: vRest, _, _=>
@@ -193,7 +193,7 @@ partial def withTermVars {α : Type} (vars : List (Nat × Expr)) (const : List (
   go (sortByIdx vars) (sortByIdx const) (sortByIdx ops) { typeParams := typeParams }
 
 partial def withTypeVars {α : Type} (mvars : List MVarId)
-    (k : Std.HashMap MVarId Expr → Array Expr → MetaM α): MetaM α := do
+    (k : Std.HashMap MVarId Expr → Array Expr → TermElabM α): TermElabM α := do
   let rec go (xs : List MVarId)
     (ctx : Std.HashMap MVarId Expr)
     (typeParams : Array Expr) := do
@@ -208,7 +208,7 @@ partial def withTypeVars {α : Type} (mvars : List MVarId)
   go mvars {} #[]
 
 def withFullContext {α : Type} (s : templateState)
-    (k : TemplateContext → MetaM α) : MetaM α := do
+    (k : TemplateContext → TermElabM α) : TermElabM α := do
     -- This k business is continuation (used to chain function calls, so that they all happen sequentially... Basically leaving room for the actual elaboration, because this only builds context)
   let mvars ← collectTypeMVars s
   withTypeVars mvars fun typeMap typeParams => do
@@ -266,7 +266,7 @@ partial def elabTempExpr (expr : tempExpr) (varMap : Std.HashMap Name Expr) : Me
           let lambdaBody ← mkLambdaFVars #[fvar] bodyExpr
           mkAppM ``Exists #[lambdaBody]
 
-def elabTemplate (t : TSyntax `template) : MetaM Expr := do
+def elabTemplate (t : TSyntax `template) : TermElabM Expr := do
   let e ← elabTemp t
   let (_, s) ← (exprInfer e).run {}
   withFullContext s fun ctx => do
