@@ -42,11 +42,11 @@ def getOpType (idx : Nat) : TemplateM Expr := do
     return f
 
 partial def termInfer : tempLit → TemplateM Expr
-  | .var idx =>
+  | .var idx | .sort idx =>
     getVarType idx
   | .const idx =>
     getConstType idx
-  | .opHole idx args => do
+  | .opHole idx args | .typeHole idx args => do
     let state ← get
     let argTypes ← args.mapM termInfer
     match state.typedOps.get? idx with
@@ -217,13 +217,13 @@ def withFullContext {α : Type} (s : templateState)
 
 partial def elabTempTerm (lit : tempLit) (varMap : Std.HashMap Name Expr) : MetaM Expr := do
   match lit with
-  | .var k =>
+  | .var k | .sort k=>
       return varMap.get! (mkVarName k)
 
   | .const k =>
       return varMap.get! (mkConstName k)
 
-  | .opHole n args =>
+  | .opHole n args |.typeHole n args =>
       let fvar := varMap.get! (mkOpName n)
       let mut argExprs := #[]
       for arg in args do
@@ -279,9 +279,9 @@ elab tk:"#test_stx" t:template : command => runTermElabM fun _ => do
     withFullContext s fun ctx => do
       let leanExpr ← elabTempExpr e ctx.termMap
       let dummyGoal ← mkFreshExprMVar leanExpr
-      let holeInfo :=
-        s!"holes vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
-      logInfo m!"{holeInfo}"
+      -- let holeInfo :=
+      --   s!"holes vars={repr (ctx.vars.map (fun p => p.1))}, consts={repr (ctx.consts.map (fun p => p.1))}, ops={repr (ctx.ops.map (fun p => p.1))}"
+      -- logInfo m!"{holeInfo}"
       logInfo (MessageData.ofGoal dummyGoal.mvarId!)
 
       return leanExpr

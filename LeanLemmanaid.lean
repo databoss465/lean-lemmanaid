@@ -4,4 +4,6 @@ import LeanLemmanaid.Basic
 import LeanLemmanaid.Abstraction
 import LeanLemmanaid.Commands
 import LeanLemmanaid.Template
+import LeanLemmanaid.TypedAbstraction
+import LeanLemmanaid.Elaboration
 import LeanLemmanaid.Unifier

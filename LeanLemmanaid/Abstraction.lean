@@ -158,16 +158,9 @@ mutual
           return .lit (.opHole (← getOpIdx e) #[])
         else
           throwError m!"Expected proposition, got term variable {e}"
-    | .mvar .. =>
-        throwError m!"Unsupported metavariable in proposition abstraction: {e}"
-    | .bvar .. =>
-        throwError m!"Unsupported loose bound variable in proposition abstraction: {e}"
-    | .lam .. =>
-        throwError m!"Unsupported lambda in proposition abstraction: {e}"
-    | .letE .. =>
-        throwError m!"Unsupported let expression in proposition abstraction: {e}"
-    | .mdata _ e' =>
-        abstractProp e'
+    | .mvar .. | .bvar .. | .lam .. | .letE .. =>
+        throwError m!"Unsupported in proposition abstraction: {e}"
+    | .mdata _ e' => abstractProp e'
     | .lit .. | .const .. | .sort .. | .proj .. =>
         if ← liftM <| isProp e then
           return .lit (.opHole (← getOpIdx e) #[])
@@ -179,10 +172,6 @@ mutual
 
     -- If a subterm is closed (no free vars/metavars/loose bvars) and is a term value
     -- (not a function and not a type), treat it as an opaque constant hole `cN`.
-    --
-    -- This intentionally collapses elaborated numerals like `OfNat.ofNat Nat 0 inst...`
-    -- and constructor noise like `Rat.mk ...` into a single `cN`, while preserving
-    -- structure for terms that actually depend on variables (e.g. `x + (4^2*3-2)`).
     if !(e.hasFVar || e.hasMVar || e.hasLooseBVars) then
       if !(← liftM <| isProp e) then
         let ty ← liftM <| whnf (← inferType e)
@@ -216,24 +205,13 @@ mutual
         if ty.isSort then
           return .opHole (← getOpIdx e) #[]
         return .const (← getConstIdx e)
-    | .mvar .. =>
-        throwError m!"Unsupported metavariable in term abstraction: {e}"
-    | .bvar .. =>
-        throwError m!"Unsupported loose bound variable in term abstraction: {e}"
-    | .lam .. =>
-        throwError m!"Unsupported lambda in term abstraction: {e}"
-    | .forallE .. =>
-        throwError m!"Unsupported forall expression in term abstraction: {e}"
-    | .letE .. =>
-        throwError m!"Unsupported let expression in term abstraction: {e}"
-    | .sort .. =>
-        throwError m!"Unsupported sort in term abstraction: {e}"
     | .lit .. =>
         return .const (← getConstIdx e)
-    | .proj .. =>
-        throwError m!"Unsupported projection in term abstraction: {e}"
     | .mdata _ e' =>
         abstractTerm e'
+    | .mvar .. | .bvar .. | .lam .. | .forallE ..
+    | .letE .. | .sort .. | .proj .. =>
+        throwError m!"Unsupported in term abstraction: {e}"
 end
 
 /--

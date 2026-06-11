@@ -24,8 +24,29 @@ inductive tempLit
   | const : Nat → tempLit
   | var : Nat → tempLit
   | opHole : Nat → Array tempLit → tempLit
-  --| typeHole : Nat → tempLit
-deriving Repr
+  | typeHole : Nat → Array tempLit → tempLit
+  | sort : Nat → tempLit
+deriving Repr, BEq, Hashable
+
+partial def tempLit.contains (t : tempLit) (l : tempLit) : Bool :=
+  match t with
+  | l'@(.const ..) | l'@(.var ..) |l'@(.sort ..) => l' == l
+  | .opHole idx args =>
+      (match l with | .opHole idx' _ => idx == idx' | _ => False) ||
+      args.any (fun arg => arg.contains l)
+  | .typeHole idx args =>
+      (match l with | .typeHole idx' _ => idx == idx' | _ => False) ||
+     args.any (fun arg => arg.contains l)
+
+def tempLit.mkName (l : tempLit) :=
+  match l with
+  | .const idx => Name.mkSimple s!"c{idx}"
+  | .var idx => Name.mkSimple s!"x{idx}"
+  | .opHole idx _ => Name.mkSimple s!"H{idx}"
+  | .typeHole idx _ => Name.mkSimple s!"T{idx}"
+  | .sort idx => Name.mkSimple s!"Sort{idx}"
+
+abbrev tempLit.mkNameIdent (l : tempLit) := mkIdent (l.mkName)
 
 partial def tempLit.toString : tempLit → String
   | .const n =>
@@ -34,33 +55,42 @@ partial def tempLit.toString : tempLit → String
       s!"x{n}"
   | .opHole n args =>
       if args.isEmpty then
-        s!"?H{n}"
+        s!"H{n}"
       else
-        s!"(?H{n} {" ".intercalate (args.toList.map tempLit.toString)})"
+        s!"H{n} {" ".intercalate (args.toList.map tempLit.toString)}"
+  | .typeHole n args =>
+      if args.isEmpty then
+        s!"T{n}"
+      else
+        s!"T{n} {" ".intercalate (args.toList.map tempLit.toString)}"
+  | .sort n =>
+      s!"Type {n}"
 
 instance : ToString tempLit where
   toString := tempLit.toString
 
 inductive tempUnOp
  | not
+deriving BEq, Hashable
 
 instance : ToString tempUnOp where
   toString
-  | .not => "not"
+  | .not => "¬"
 
 instance : Repr tempUnOp where
   reprPrec
-  |.not, _ => "¬"
+  |.not, _ => "Not"
 
 inductive tempBinOp
  | and |or | imp | iff
+deriving BEq, Hashable
 
 instance : ToString tempBinOp where
   toString
-    | .and => "and"
-    | .or  => "or"
-    | .imp => "imp"
-    | .iff => "iff"
+    | .and => "∧"
+    | .or  => "∨"
+    | .imp => "→"
+    | .iff => "↔"
 
 instance : Repr tempBinOp where
   reprPrec
@@ -72,6 +102,7 @@ instance : Repr tempBinOp where
 
 inductive tempBinder
   | forall | exists
+deriving BEq, Hashable
 
 instance : Repr tempBinder where
   reprPrec
@@ -80,8 +111,8 @@ instance : Repr tempBinder where
 
 instance : ToString tempBinder where
   toString
-  | .forall => "forall"
-  | .exists => "exists"
+  | .forall => "∀"
+  | .exists => "∃"
 
 
 inductive tempExpr
@@ -90,7 +121,15 @@ inductive tempExpr
   | un : tempUnOp → tempExpr → tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
   | bind : tempBinder → Nat → tempExpr → tempExpr
-deriving Repr
+deriving Repr, BEq, Hashable
+
+partial def tempExpr.contains (expr : tempExpr) (lit : tempLit) : Bool :=
+  match expr with
+  | .lit l => l.contains lit
+  | .eq l r => (l.contains lit) ∨ (r.contains lit)
+  | .bin _ l r => (l.contains lit) ∨ (r.contains lit)
+  | .un _ e => e.contains lit
+  | .bind _ _ e => e.contains lit
 
 partial def tempExpr.toString : tempExpr → String
   | .lit l =>
@@ -98,19 +137,21 @@ partial def tempExpr.toString : tempExpr → String
   | .eq l₁ l₂ =>
       s!"({l₁} = {l₂})"
   | .un op e =>
-      s!"({op} {tempExpr.toString e})"
+      s!"{op} {tempExpr.toString e}"
   | .bin op e₁ e₂ =>
-      s!"({tempExpr.toString e₁} {op} {tempExpr.toString e₂})"
+      s!"{tempExpr.toString e₁} {op} {tempExpr.toString e₂}"
   | .bind b n e =>
-      s!"({b} {n}. {tempExpr.toString e})"
+      s!"{b} {n}. {tempExpr.toString e}"
 
 instance : ToString tempExpr where
   toString := tempExpr.toString
 
--- structure template where
---   opHoles : Array Nat
---   vars : Array Nat
---   statement : tempExpr
+structure template where
+  name : String := ""
+  ctx : List (tempLit × tempExpr)
+  statement : tempExpr
+
+abbrev template.addContext (T : template) (t : (tempLit × tempExpr)) := T.ctx.insert t
 
 -- Syntax for templates
 
@@ -232,6 +273,7 @@ partial def elabTemp : Syntax → MetaM tempExpr
       return .lit e
     | .var _  | .const _=>
       throwErrorAt lit "Only operator applications can be Propositions"
+    | _ => throwUnsupportedSyntax
   | `(template| $lhs:temp_lit = $rhs:temp_lit) => do
     let lExpr ← elabLit lhs
     let rExpr ← elabLit rhs
@@ -263,29 +305,19 @@ partial def elabTemp : Syntax → MetaM tempExpr
   | _ => throwUnsupportedSyntax
 
 mutual
-partial def delabAtom (l : tempLit) : MetaM (TSyntax `temp_lit_atom) := do
-  match l with
-  | .var idx => do
-    let name := mkIdent (mkVarName idx)
-    `(temp_lit_atom| $name:ident)
-  | .const idx => do
-    let name := mkIdent (mkConstName idx)
-    `(temp_lit_atom| $name:ident)
-  | t@(.opHole ..) => do
+partial def delabAtom : tempLit → MetaM (TSyntax `temp_lit_atom)
+  | t@(.var _) | t@(.const _) | t@(.sort _) =>
+    `(temp_lit_atom| $(t.mkNameIdent):ident)
+  | t@(.opHole ..) | t@(.typeHole ..) => do
     let inner ← delabLit t
     `(temp_lit_atom| ($inner:temp_lit))
 
-partial def delabLit (l : tempLit) : MetaM (TSyntax `temp_lit) := do
-  match l with
-  | t@(.var _) => do
+partial def delabLit : tempLit → MetaM (TSyntax `temp_lit)
+  | t@(.var _) | t@(.const _) | t@(.sort _) => do
     let stx ← delabAtom t
     `(temp_lit| $stx:temp_lit_atom)
-  | t@(.const _) => do
-    let stx ← delabAtom t
-    `(temp_lit| $stx:temp_lit_atom)
-  | .opHole idx args => do
-    let name := mkIdent (mkOpName idx)
-    let fn ← `(temp_lit_atom| $name:ident)
+  | t@(.opHole _ args) | t@(.typeHole _ args) => do
+    let fn ← `(temp_lit_atom| $(t.mkNameIdent):ident)
     let argStx ← args.mapM delabAtom
     `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
 end
@@ -310,7 +342,7 @@ def delabExpr : tempExpr → MetaM (TSyntax `template)
     | .imp =>  `(template| $lStx:template → $rStx:template)
     | .iff => `(template| $lStx:template ↔ $rStx:template)
   | .bind op idx e => do
-    let name := mkIdent (mkVarName idx)
+    let name := (tempLit.var idx).mkNameIdent
     let body ← delabExpr e
     match op with
     | .forall => `(template| ∀ $name:ident, $body:template)
@@ -322,4 +354,4 @@ elab tk:"#test_delab " t:template : command =>
     let t' ← delabExpr e
     withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
 
--- #test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+#test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
