@@ -1,8 +1,22 @@
 import Lean
 import LeanLemmanaid.Template
-import LeanLemmanaid.Unifier
 
 open Lean Meta Elab Command Term
+
+/-!
+# Typed Abstraction
+
+This module contains the abstraction pipeline to obtain the template of a theorem.
+A `template` contains the context, a list of term-type tuples along with the statement.
+
+## Main Definitions
+
+- abstractProp : Abstraction for the statement of the template, builds a `tempExpr` from the `Expr` of the theorem
+- abstractTerm : Term-level abstraction, builds a `tempLit` from an `Expr`
+- abstractType : Type-level abstraction, builds a `tempExpr` from an `Expr`, intended to bue used for the types of terms in the statement
+- abstractContext : Abstraction for the context of the template, builds `template.ctx` a list of term-type tuples for all the terms that appear in the statement, along with their types.
+- abstractTypedTemplate : Top-level abstraction. Builds a `template` from an `Expr` of the theorem using the above functions. Also sorts the context by dependency. Also removes leading binders (i.e. parameters) from the statement and puts them in the context.
+-/
 
 namespace TypedAbstraction
 
@@ -268,7 +282,7 @@ mutual
       return .opHole (← getOpIdx e).1 #[]
     match e with
     | .sort lvl =>
-        return .sort (lvl.toNat.getD 0)
+      return .sort lvl.toNat
     | .mdata _ e' =>
         abstractTypeLit e'
     | .app .. =>
@@ -348,7 +362,7 @@ mutual
         throwError m!"Unsupported in type abstraction: {e}"
 end
 
-partial def abstractStoredContext : AbstractM (List (tempLit × tempExpr)) := do
+partial def abstractContext : AbstractM (List (tempLit × tempExpr)) := do
   let rec processLoop (processedTypes : List Expr) (processedVars : List FVarId)
                       (processedConsts : List Expr) (processedOps : List Expr)
                       (result : List (tempLit × tempExpr)) :
@@ -421,7 +435,7 @@ partial def abstractTypedTemplate (e : Expr) : AbstractM template := do
           throwError m!"Failed to classify theorem binder {name} : {repr type}\n{ex.toMessageData}"
       if typeIsProp then
         let statement ← abstractProp e
-        let ctx ← abstractStoredContext
+        let ctx ← abstractContext
         match (topologicalSort ctx []) with
         | Except.error msg => throwError m!"{msg}"
         | Except.ok sortedCtx =>
@@ -434,50 +448,22 @@ partial def abstractTypedTemplate (e : Expr) : AbstractM template := do
           abstractTypedTemplate (body.instantiate1 fvar)
   | _ =>
       let statement ← abstractProp e
-      let ctx ← abstractStoredContext
+      let ctx ← abstractContext
       match (topologicalSort ctx []) with
       | Except.error msg => throwError m!"{msg}"
       | Except.ok sortedCtx =>
         return { ctx := sortedCtx, statement := statement }
 
-/- Text display function (and helpers) for debugging. Won't need it soon -/
-
--- def insertSortedTypedByIdx {α : Type} (x : Nat × α) : List (Nat × α) → List (Nat × α)
---   | [] => [x]
---   | y :: ys =>
---       if x.1 ≤ y.1 then
---         x :: y :: ys
---       else
---         y :: insertSortedTypedByIdx x ys
-
--- def sortTypedByIdx {α : Type} (xs : List (Nat × α)) : List (Nat × α) :=
---   xs.foldr insertSortedTypedByIdx []
-
--- def typedAbstractionInfo (state : AbstractionState) : MetaM String := do
---   let mut out := "\n"
---   unless state.simpleTypes.toList.length = 0 do
---     out := out ++ "Types\n"
---     for (idx, e) in sortTypedByIdx <| state.simpleTypes.toList.map fun (e, idx) => (idx, e) do
---       out := out ++ s!"{e} ↦ T{idx}\n"
---   unless state.consts.toList.length = 0 do
---     out := out ++ "Constants\n"
---     for (idx, e) in sortTypedByIdx <| state.consts.toList.map fun (e, idxTy) => (idxTy.1, e) do
---       out := out ++ s!"{e} ↦ c{idx}\n"
---   unless state.ops.toList.length = 0 do
---     out := out ++ "Operators\n"
---     for (idx, e) in sortTypedByIdx <| state.ops.toList.map fun (e, idxTy) => (idxTy.1, e) do
---       out := out ++ s!"{e} ↦ H{idx}\n"
---   return out
-
-elab tk:"#test_typed_abs " id:ident : command => runTermElabM fun _ => do
-  let name ← resolveGlobalConstNoOverload id
-  let info ← getConstInfo name
-  let type ← instantiateMVars info.type
-  let (t, _) ← (abstractTypedTemplate type).run {}
-  let stx ← delabExpr t.statement
-  withRef tk <| logInfo m!"\n{t.ctx}\n{stx}"
+-- elab tk:"#test_typed_abs " id:ident : command => runTermElabM fun _ => do
+--   let name ← resolveGlobalConstNoOverload id
+--   let info ← getConstInfo name
+--   let type ← instantiateMVars info.type
+--   let (t, _) ← (abstractTypedTemplate type).run {}
+--   let stx ← delabExpr t.statement
+--   withRef tk <| logInfo m!"\n{t.ctx}\n{stx}"
 
 end TypedAbstraction
 
-#test_typed_abs Fin.exists_iff
-#test_typed_abs Nat.add_div
+-- #test_typed_abs Fin.exists_iff
+-- #test_typed_abs Function.comp_id
+-- #test_typed_abs Nat.add_div

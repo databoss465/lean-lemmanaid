@@ -25,7 +25,7 @@ inductive tempLit
   | var : Nat → tempLit
   | opHole : Nat → Array tempLit → tempLit
   | typeHole : Nat → Array tempLit → tempLit
-  | sort : Nat → tempLit
+  | sort : Option Nat → tempLit
 deriving Repr, BEq, Hashable
 
 partial def tempLit.contains (t : tempLit) (l : tempLit) : Bool :=
@@ -44,7 +44,8 @@ def tempLit.mkName (l : tempLit) :=
   | .var idx => Name.mkSimple s!"x{idx}"
   | .opHole idx _ => Name.mkSimple s!"H{idx}"
   | .typeHole idx _ => Name.mkSimple s!"T{idx}"
-  | .sort idx => Name.mkSimple s!"Sort{idx}"
+  | .sort (some idx) => Name.mkSimple s!"Sort{idx}"
+  | .sort none => Name.mkSimple s!"Sort[u_1]"
 
 abbrev tempLit.mkNameIdent (l : tempLit) := mkIdent (l.mkName)
 
@@ -63,8 +64,10 @@ partial def tempLit.toString : tempLit → String
         s!"T{n}"
       else
         s!"T{n} {" ".intercalate (args.toList.map tempLit.toString)}"
-  | .sort n =>
+  | .sort (some n) =>
       s!"Type {n}"
+  | .sort none =>
+      s!"Type u_1"
 
 instance : ToString tempLit where
   toString := tempLit.toString
@@ -354,4 +357,4 @@ elab tk:"#test_delab " t:template : command =>
     let t' ← delabExpr e
     withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
 
-#test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+-- #test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3

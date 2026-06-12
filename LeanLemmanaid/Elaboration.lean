@@ -1,24 +1,25 @@
 import Lean
 import LeanLemmanaid.Template
-import LeanLemmanaid.Unifier
 import LeanLemmanaid.TypedAbstraction
 
 open Lean Meta Elab Command Term
 open TypedAbstraction
 
-/-
-TODO:
-1. ~~ Write a topological sorter for template.ctx ~~
-2. Write a WithTypeVars for this new typing system
-3. Write/Use WithTermVars
-4. Write/Use WithFullContext
+/-!
+# Elaboration
+
+## Defintions
+- elabTempExpr' : Elaborate a `tempExpr` into a `Lean.Expr`. For logical operators, just match the patterns and, for the literals (vars, opHoles, consts, types), obtain them from context.
+- withContext : Build the lean context from the sorted `template.ctx` and run the continuation `k`. Makes nested localDecls.
 -/
 
 abbrev TempElabM := StateRefT (Std.HashMap tempExpr Expr) MetaM
 
 partial def elabTempExpr' : tempExpr → TempElabM Expr
-  | .lit (.sort idx) =>
+  | .lit (.sort (some idx)) =>
     return Expr.sort (Level.ofNat idx)
+  | .lit (.sort none) =>
+    return Expr.sort (← mkFreshLevelMVar)
   | .lit l@(.var _) | .lit l@(.const _) => do
     let ctx ← get
     match ctx.get? (.lit l) with
@@ -74,7 +75,7 @@ partial def withContext {α : Type} (sortedCtx : List (tempLit × tempExpr))
       modify (fun env => env.insert (.lit hole) newFVar)
       withContext rest k
 
-elab tk:"#test_abs! " id:ident : command => runTermElabM fun _ => do
+elab tk:"#abstract " id:ident : command => runTermElabM fun _ => do
   -- 1. Resolve the theorem from Mathlib/Lean
   let name ← resolveGlobalConstNoOverload id
   let info ← getConstInfo name
@@ -91,4 +92,4 @@ elab tk:"#test_abs! " id:ident : command => runTermElabM fun _ => do
           return ()
       let _ ← action.run {}
 
-#test_abs! Fin.exists_iff
+-- #abstract Fin.exists_iff
