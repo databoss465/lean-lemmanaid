@@ -72,6 +72,13 @@ def getVarIdxWithType (fvarId : FVarId) (ty : Expr) : AbstractM (Nat × Expr) :=
       modify fun s => { s with vars := s.vars.insert fvarId (idx, ty) }
       return (idx, ty)
 
+partial def stripNonExplicitBinders : Expr → Expr
+  | .forallE n domain body .default =>
+      .forallE n domain (stripNonExplicitBinders body) .default
+  | .forallE _ _ body _ =>
+      stripNonExplicitBinders (body.instantiate1 (.sort 0))  -- skip non-explicit, shift bvars
+  | other => other
+
 def getOpIdx (head : Expr) : AbstractM (Nat × Expr) := do
   let head := head.consumeMData
   let s ← get
@@ -79,7 +86,7 @@ def getOpIdx (head : Expr) : AbstractM (Nat × Expr) := do
   | some pair => return pair
   | none =>
       let idx ← getOpCount
-      let ty ← inferType head
+      let ty := stripNonExplicitBinders (← inferType head)
       modify fun s => { s with ops := s.ops.insert head (idx, ty) }
       return (idx, ty)
 
@@ -95,19 +102,28 @@ def getConstIdx (c : Expr) : AbstractM (Nat × Expr) := do
       return (idx, ty)
 
 /- Returns two arrays: non-explicit arguments applied to the head, and explicit
-arguments that should appear as template arguments. -/
+arguments that should appear as template arguments.
+Only *leading* implicit args (before the first explicit arg) are included in
+`implMasked` and folded into the canonical `partialAppFn`. Instance-implicit args
+that appear after the first explicit arg (e.g. the `[Decidable c]` in `@ite`) are
+skipped from both arrays — they are dependent on explicit args and would produce an
+ill-typed partial application if included in `implMasked`. Lean's typeclass inference
+will reconstruct them at instantiation time. -/
 partial def sortAppArgs (fn : Expr) (args : Array Expr) : MetaM (Array Expr × Array Expr) := do
   let mut fnType ← inferType fn
   let mut implMasked := #[]
   let mut expl := #[]
+  let mut seenExplicit := false
   for arg in args do
     let t ← whnf fnType
     match t with
     | .forallE _ _ body bi =>
         if bi == BinderInfo.default then
+          seenExplicit := true
           expl := expl.push arg
-        else
-          implMasked := implMasked.push arg
+        else if !seenExplicit then
+          implMasked := implMasked.push arg  -- only leading implicits go into partialAppFn
+        -- instance-implicit args after the first explicit arg are skipped entirely
         fnType := body.instantiate1 arg
     | _ =>
         throwError m!"Cannot read application arity for {fn}; expected a function type, got {t}"
@@ -118,14 +134,17 @@ partial def sortAppArgsWithTypes (fn : Expr) (args : Array Expr) :
   let mut fnType ← inferType fn
   let mut implMasked := #[]
   let mut expl := #[]
+  let mut seenExplicit := false
   for arg in args do
     let t ← whnf fnType
     match t with
     | .forallE _ domain body bi =>
         if bi == BinderInfo.default then
+          seenExplicit := true
           expl := expl.push (arg, domain)
-        else
+        else if !seenExplicit then
           implMasked := implMasked.push arg
+        -- instance-implicit args after the first explicit arg are skipped entirely
         fnType := body.instantiate1 arg
     | _ =>
         throwError m!"Cannot read application arity for {fn}; expected a function type, got {t}"
@@ -279,7 +298,10 @@ mutual
   partial def abstractTypeLit (e : Expr) : AbstractM tempLit := do
     let e := e.consumeMData
     if ← liftM <| isPropSafe e then
-      return .opHole (← getOpIdx e).1 #[]
+      let propExpr ← abstractProp e
+      match propExpr with
+      | .lit l => return l                        -- reuses existing holes (H5, x1, etc.)
+      | _ => return .opHole (← getOpIdx e).1 #[] -- compound prop, stay opaque
     match e with
     | .sort lvl =>
       return .sort lvl.toNat
@@ -288,7 +310,7 @@ mutual
     | .app .. =>
         let fn := e.getAppFn.consumeMData
         let args := e.getAppArgs
-        -- This might break!!
+        -- This might break!! Called it!
         let (implArgs, explArgs) ← liftM <| sortAppArgsWithTypes fn args
         let partialAppFn := mkAppN fn implArgs
         let argLits ← explArgs.mapM fun (arg, domain) =>
@@ -329,16 +351,22 @@ mutual
         else
           abstractTerm e
 
-  partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : AbstractM tempLit := do
-    let expectedType ← liftM <| whnf expectedType
-    if expectedType.isSort then
-      abstractTypeLit e
+partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : AbstractM tempLit := do
+  let expectedType ← liftM <| whnf expectedType
+  if expectedType.isSort then
+    if ← liftM <| isPropSafe e then
+      let propExpr ← abstractProp e
+      match propExpr with
+      | .lit l => return l                         -- e.g. LE.le c (...) → reuses H5
+      | _ => return .opHole (← getOpIdx e).1 #[]  -- e.g. a = b, A ∧ B → still opaque
     else
-      match e.consumeMData with
-      | .fvar fvarId =>
-          return .var (← getVarIdxWithType fvarId expectedType).1
-      | _ =>
-          abstractTerm e
+      abstractTypeLit e
+  else
+    match e.consumeMData with
+    | .fvar fvarId =>
+        return .var (← getVarIdxWithType fvarId expectedType).1
+    | _ =>
+        abstractTerm e
 
   partial def abstractType (e : Expr) : AbstractM tempExpr := do
     let e := e.consumeMData
@@ -346,14 +374,18 @@ mutual
       return ← abstractProp e
     match e with
     | .forallE name type body bi =>
-        withIgnoredLocal name bi type fun fvar => do
-          let lhs ←
-            if ← liftM <| isProp type then
-              abstractProp type
-            else
-              abstractType type
-          let rhs ← abstractType (body.instantiate1 fvar)
-          return .bin .imp lhs rhs
+        if body.hasLooseBVar 0 && !(← liftM <| isProp type) then
+          withAbstractedVar name bi type fun idx fvar => do
+            return .bind .forall idx (← abstractType (body.instantiate1 fvar))
+        else
+          withIgnoredLocal name bi type fun fvar => do
+            let lhs ←
+              if ← liftM <| isProp type then
+                abstractProp type
+              else
+                abstractType type
+            let rhs ← abstractType (body.instantiate1 fvar)
+            return .bin .imp lhs rhs
     | .mdata _ e' =>
         abstractType e'
     | .sort .. | .fvar .. | .const .. | .app .. | .lit .. =>
@@ -370,10 +402,10 @@ partial def abstractContext : AbstractM (List (tempLit × tempExpr)) := do
 
     let s ← get
 
-    let newTypes := s.simpleTypes.toList.filter (fun (ty, _) => !processedTypes.contains ty)
-    let newVars := s.vars.toList.filter (fun (id, _) => !processedVars.contains id)
-    let newConsts := s.consts.toList.filter (fun (expr, _) => !processedConsts.contains expr)
-    let newOps := s.ops.toList.filter (fun (expr, _) => !processedOps.contains expr)
+    let newTypes := (s.simpleTypes.toList.filter (fun (ty, _) => !processedTypes.contains ty)).toArray.qsort (·.2 < ·.2) |>.toList
+    let newVars := (s.vars.toList.filter (fun (id, _) => !processedVars.contains id)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
+    let newConsts := (s.consts.toList.filter (fun (expr, _) => !processedConsts.contains expr)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
+    let newOps := (s.ops.toList.filter (fun (expr, _) => !processedOps.contains expr)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
 
     if newTypes.isEmpty && newVars.isEmpty && newConsts.isEmpty && newOps.isEmpty then
       return result
@@ -424,7 +456,7 @@ partial def topologicalSort (remaining : List (tempLit × tempExpr))
   | none =>
       Except.error "Circular dependency detected in the extracted context!"
 
-partial def abstractTypedTemplate (e : Expr) : AbstractM template := do
+partial def abstractTypedTemplate (e : Expr) : AbstractM Template := do
   let e := e.consumeMData
   match e with
   | .forallE name type body bi =>
@@ -454,16 +486,4 @@ partial def abstractTypedTemplate (e : Expr) : AbstractM template := do
       | Except.ok sortedCtx =>
         return { ctx := sortedCtx, statement := statement }
 
--- elab tk:"#test_typed_abs " id:ident : command => runTermElabM fun _ => do
---   let name ← resolveGlobalConstNoOverload id
---   let info ← getConstInfo name
---   let type ← instantiateMVars info.type
---   let (t, _) ← (abstractTypedTemplate type).run {}
---   let stx ← delabExpr t.statement
---   withRef tk <| logInfo m!"\n{t.ctx}\n{stx}"
-
 end TypedAbstraction
-
--- #test_typed_abs Fin.exists_iff
--- #test_typed_abs Function.comp_id
--- #test_typed_abs Nat.add_div

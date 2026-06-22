@@ -4,88 +4,107 @@ set_option pp.proofs false
 
 -- Sanity Checks
 #check Nat.add_comm
-#abstract Nat.add_comm
--- #inst_temp H1 x1 x2 = H1 x2 x1 with
---  #[Nat, _, HAdd.hAdd]
+template comm := Nat.add_comm
+#show_template comm
+template comm' := H1 x1 x2 = H1 x2 x1 where
+  T1 : Type, x1 : T1, x2 : T1, H1 : T1 → T1 → T1
+#show_template comm'
+#instantiate comm with #[Nat, HAdd.hAdd]
 
 #check Nat.add_add_add_comm
-#abstract Nat.add_add_add_comm
+template super_comm := Nat.add_add_add_comm
+#show_template super_comm
 -- #inst_temp H1 (H1 x1 x2) (H1 x3 x4) = H1 (H1 x1 x3) (H1 x2 x4) with
   -- #[Nat, HAdd.hAdd]
 
 #check Nat.add_assoc
-#abstract Nat.add_assoc
--- #inst_temp H1 (H1 x1 x2) x3 = H1 x1 (H1 x2 x3) with
---   #[Nat, _, HAdd.hAdd]
+template assoc := Nat.add_assoc
+#show_template assoc
+#instantiate assoc with #[Nat, HAdd.hAdd]
+
 
 #check Nat.add_zero
-#abstract Nat.add_zero
--- #inst_temp H1 x1 c1 = x1 with
---   #[Nat, _, 0, HAdd.hAdd]
+template right_id := Nat.add_zero
+#show_template right_id
+#instantiate right_id with #[Nat, 0, HAdd.hAdd]
+
 
 #check Int.neg_add
-#abstract Int.neg_add
--- #inst_temp H2 (H1 x1 x2) = H1 (H2 x1) (H2 x2) with #[Int, HAdd.hAdd, Neg.neg]
+template neg_distrib := Int.neg_add
+#show_template neg_distrib
+#instantiate neg_distrib with #[Int, HAdd.hAdd, Neg.neg]
 
 #check Vector.add_comm
-#abstract Vector.add_comm
--- #inst_temp ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
-  -- with #[Int, Vector Int _, _, _, HAdd.hAdd, HAdd.hAdd]
+template depdt_comm := Vector.add_comm
+#show_template depdt_comm
+#instantiate depdt_comm with #[Int, HAdd.hAdd, Nat, Vector, HAdd.hAdd]
 
 #check Nat.add_mul
-#abstract Nat.add_mul
+template right_distrib := Nat.add_mul
+#show_template right_distrib
 -- #inst_temp H2(H1 x1 x2)x3 = H1(H2 x1 x3)(H2 x2 x3)
 --   with #[Nat, _, HAdd.hAdd, HMul.hMul]
 
 #check Nat.add_div
-#abstract Nat.add_div
--- #test_stx H1 c1 x1 → H3(H2 x2 x3)x1 = H2(H2(H3 x2 x1)(H3 x3 x1))(H6(H5 x1(H2(H4 x2 x1)(H4 x3 x1)))c2 c1)
--- Want ite in DSL! Same issue is that type of ite depends on its args!
--- #inst_temp H1 c1 x1 → H3(H2 x2 x3)x1 = H2(H2(H3 x2 x1)(H3 x3 x1))(H6(H5 x1(H2(H4 x2 x1)(H4 x3 x1)))c2 c1)
---   with #[Nat, Nat, Nat, Nat, Nat, 0, 1, LT.lt, HAdd.hAdd, HDiv.hDiv, HMod.hMod, LE.le, @ite Nat]
+template div_right_distrib := Nat.add_div
+#show_template div_right_distrib
+#instantiate div_right_distrib with #[Nat, 0, 1, LT.lt, HAdd.hAdd, HDiv.hDiv, HMod.hMod, LE.le, ite]
 
 #check Nat.div_add_mod
-#abstract Nat.div_add_mod
--- #inst_temp H4(H2 x2(H1 x1 x2))(H3 x1 x2) = x1
---   with #[Nat, _, _, _, _, HDiv.hDiv, HMul.hMul, HAdd.hAdd, HMod.hMod]
+template div_law := Nat.div_add_mod
+#show_template div_law
+#instantiate div_law with #[Nat, HDiv.hDiv, HMod.hMod, HAdd.hAdd, HMul.hMul]
 
 #check Nat.eq_mul_of_div_eq_left
-#abstract Nat.eq_mul_of_div_eq_left
--- #inst_temp H1 x1 x2 → H2 x2 x1 = x3 → x2 = H3 x3 x1
---   with #[Nat, _, _, Dvd.dvd, HDiv.hDiv, HMul.hMul]
+template mul_div := Nat.eq_mul_of_div_eq_left
+#show_template mul_div
+#instantiate mul_div with #[Nat, Dvd.dvd, HDiv.hDiv, HMul.hMul]
 
 #check Nat.lcm_dvd_lcm_mul_left_right
-#abstract Nat.lcm_dvd_lcm_mul_left_right
+template X1 := Nat.lcm_dvd_lcm_mul_left_right
+#show_template X1
+#instantiate X1 with #[Nat, Nat.lcm, HMul.hMul, Dvd.dvd]
 
--- DEBUG!
+-- id become H1 here... Maybe it chould be c1?
 #check Function.comp_id
-#abstract Function.comp_id
--- #inst_temp H2 x1(H1) = x1
---   with #[_, _, id, Function.comp]
+template comp_id := Function.comp_id
+#show_template comp_id
+#instantiate comp_id with #[_, id, _, Function.comp]
+
 
 #check not_false_iff
-#abstract not_false_iff
--- #inst_temp ¬H1 ↔ H2
---   with #[False, True]
+#check not_true
+template exclusive := not_false_iff
+#show_template exclusive
+#instantiate exclusive with #[True, False]
+#instantiate exclusive with #[False, True]
 
--- #abstract iff_iff_eq
--- #inst_temp (H1 ↔ H2) ↔ H1 = H2
---   with #[_, _]
+template X0 := iff_iff_eq
+#instantiate X0 with #[_, _]
 
 #check Nat.div_lt_iff_lt_mul
-#abstract Nat.div_lt_iff_lt_mul
--- #inst_temp H1 c1 x1 → H1(H2 x2 x1)x3 ↔ H1 x2(H3 x3 x1)
---   with #[Nat, Nat, 0, LT.lt, HMul.hMul, HDiv.hDiv]
+template X2 := Nat.div_lt_iff_lt_mul
+#show_template X2
+#instantiate X2 with #[Nat, 0, LT.lt, HDiv.hDiv, HMul.hMul]
 
 #check Fin.mk
 #check Fin.exists_iff
-#abstract Fin.exists_iff
--- #test_stx ∃ x1, H1 x1 ↔ ∃ x2, ∃ x3, H1(H2 x2 x3)
--- Dependent types issue!
--- #inst_temp ∃ x1, H1 x1 ↔ ∃ x2, ∃ x3, H1(H2 x2 x3)
---   with #[Nat, Nat, _, fun (Fin _) => Prop, Fin.mk]
+template fin_exist := Fin.exists_iff
+#show_template fin_exist
+#instantiate fin_exist with #[Nat, Fin, _, LT.lt, Fin.mk]
+-- Idi modda gudisipoina example
 
 #check Rat.mkRat_eq_div
-#abstract Rat.mkRat_eq_div
--- #inst_temp H1 x1 x2 = H4(H2 x1)(H3 x2)
---   with #[_, _, _, _, _, mkRat, Int.cast, Nat.cast, HDiv.hDiv]
+template X4 := Rat.mkRat_eq_div
+#show_template X4
+#instantiate X4 with #[Int, Nat, Rat, mkRat, Int.cast, Nat.cast, HDiv.hDiv]
+
+#check List.all_reverse
+template list_rev := List.all_reverse
+#show_template list_rev
+#instantiate list_rev with #[_, List, List.reverse, Bool, List.all]
+
+#check Array.getElem?_append_left
+template array_get := Array.getElem?_append_left
+#show_template array_get
+#instantiate array_get with #[Nat, LT.lt, _, Array, Array.size, HAppend.hAppend, Option, getElem?]

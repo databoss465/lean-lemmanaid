@@ -26,7 +26,7 @@ inductive tempLit
   | opHole : Nat → Array tempLit → tempLit
   | typeHole : Nat → Array tempLit → tempLit
   | sort : Option Nat → tempLit
-deriving Repr, BEq, Hashable
+deriving Repr, BEq, Hashable, ToExpr
 
 partial def tempLit.contains (t : tempLit) (l : tempLit) : Bool :=
   match t with
@@ -45,7 +45,7 @@ def tempLit.mkName (l : tempLit) :=
   | .opHole idx _ => Name.mkSimple s!"H{idx}"
   | .typeHole idx _ => Name.mkSimple s!"T{idx}"
   | .sort (some idx) => Name.mkSimple s!"Sort{idx}"
-  | .sort none => Name.mkSimple s!"Sort[u_1]"
+  | .sort none => Name.mkSimple s!"Sort_u"
 
 abbrev tempLit.mkNameIdent (l : tempLit) := mkIdent (l.mkName)
 
@@ -64,6 +64,8 @@ partial def tempLit.toString : tempLit → String
         s!"T{n}"
       else
         s!"T{n} {" ".intercalate (args.toList.map tempLit.toString)}"
+  | .sort (some 0) =>
+      s!"Prop"
   | .sort (some n) =>
       s!"Type {n}"
   | .sort none =>
@@ -74,7 +76,7 @@ instance : ToString tempLit where
 
 inductive tempUnOp
  | not
-deriving BEq, Hashable
+deriving BEq, Hashable, ToExpr
 
 instance : ToString tempUnOp where
   toString
@@ -86,7 +88,7 @@ instance : Repr tempUnOp where
 
 inductive tempBinOp
  | and |or | imp | iff
-deriving BEq, Hashable
+deriving BEq, Hashable, ToExpr
 
 instance : ToString tempBinOp where
   toString
@@ -105,7 +107,7 @@ instance : Repr tempBinOp where
 
 inductive tempBinder
   | forall | exists
-deriving BEq, Hashable
+deriving BEq, Hashable, ToExpr
 
 instance : Repr tempBinder where
   reprPrec
@@ -124,7 +126,7 @@ inductive tempExpr
   | un : tempUnOp → tempExpr → tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
   | bind : tempBinder → Nat → tempExpr → tempExpr
-deriving Repr, BEq, Hashable
+deriving Repr, BEq, Hashable, ToExpr
 
 partial def tempExpr.contains (expr : tempExpr) (lit : tempLit) : Bool :=
   match expr with
@@ -149,23 +151,16 @@ partial def tempExpr.toString : tempExpr → String
 instance : ToString tempExpr where
   toString := tempExpr.toString
 
-structure template where
-  name : String := ""
-  ctx : List (tempLit × tempExpr)
-  statement : tempExpr
-
-abbrev template.addContext (T : template) (t : (tempLit × tempExpr)) := T.ctx.insert t
-
 -- Syntax for templates
 
 declare_syntax_cat temp_lit
 declare_syntax_cat temp_lit_atom
 
--- An atom of template literals is either an identifier or an id in parantheses
+-- An atom of template_stx literals is either an identifier or an id in parantheses
 syntax ident : temp_lit_atom
 syntax "(" temp_lit ")" : temp_lit_atom
 
--- A template literal can either be one
+-- A template_stx literal can either be one
 syntax temp_lit_atom : temp_lit
 syntax temp_lit_atom temp_lit_atom+ : temp_lit
 
@@ -188,6 +183,16 @@ mutual    -- Functions that call each other
       else if nameStr.startsWith "H" then
         let n ← stxCheck id "H"
         return tempLit.opHole n #[]
+      else if nameStr.startsWith "T" then
+        let n ← stxCheck id "T"
+        return tempLit.typeHole n #[]
+      else if nameStr == "Sort_u" then
+        return tempLit.sort none
+      else if nameStr.startsWith "Sort" then
+        let n ← stxCheck id "Sort"
+        return tempLit.sort (some n)
+      else if nameStr == "Prop" then
+        return tempLit.sort (some 0)
       else
         throwErrorAt id s!"Unknown Lemmanaid identifier prefix for '{nameStr}'. Expected x, H, or T."
     -- If there's a paranthesis
@@ -207,6 +212,12 @@ mutual    -- Functions that call each other
           for arg in args do
             argExprs := argExprs.push (← elabAtom arg)
           return tempLit.opHole opIdx argExprs
+        else if nameStr.startsWith "T" then
+          let opIdx ← stxCheck id "T"
+          let mut argExprs := #[]
+          for arg in args do
+            argExprs := argExprs.push (← elabAtom arg)
+          return tempLit.typeHole opIdx argExprs
         else
           throwErrorAt id "Application head must be an operator starting with 'H' (e.g., H1)"
 
@@ -256,20 +267,32 @@ def elabBinder : Syntax → MetaM tempBinder
   | _ => throwUnsupportedSyntax
 
 -- Represents a "lemma" which is a proposition
-declare_syntax_cat template
+declare_syntax_cat template_stx
 
-syntax temp_lit " = " temp_lit : template              -- Equality propositions
-syntax temp_lit : template                             -- Some literals, can be lemmas (Relational propositions)
+syntax temp_lit " = " temp_lit : template_stx              -- Equality propositions
+syntax temp_lit : template_stx                             -- Some literals, can be lemmas (Relational propositions)
 
-syntax:50 temp_unop template:51 : template              -- Not
-syntax:35 template:36 temp_binop template:35 : template     -- And/Or/Implies
-syntax temp_binder ident ", " template:10 : template     -- Forall/Exists
-syntax temp_binder ident+ ", " template:10 : template
+syntax:50 temp_unop template_stx:51 : template_stx              -- Not
+syntax:35 template_stx:36 temp_binop template_stx:35 : template_stx     -- And/Or/Implies
+syntax temp_binder ident ", " template_stx:10 : template_stx     -- Forall/Exists
+syntax temp_binder ident+ ", " template_stx:10 : template_stx
 
-syntax "(" template ")" : template                    -- Grouping
+syntax "(" template_stx ")" : template_stx                    -- Grouping
+
+-- Represents the context for the lemma
+declare_syntax_cat template_type
+syntax template_stx : template_type
+syntax template_type " → " template_type : template_type
+syntax "Prop" : template_type
+syntax "Type" : template_type
+syntax "Sort " num : template_type
+
+declare_syntax_cat template_ctx
+syntax temp_lit " : " template_type : template_ctx
+
 
 partial def elabTemp : Syntax → MetaM tempExpr
-  | `(template| $lit:temp_lit) => do
+  | `(template_stx| $lit:temp_lit) => do
     let e ← elabLit lit
     match e with
     | .opHole _ _ =>
@@ -277,34 +300,65 @@ partial def elabTemp : Syntax → MetaM tempExpr
     | .var _  | .const _=>
       throwErrorAt lit "Only operator applications can be Propositions"
     | _ => throwUnsupportedSyntax
-  | `(template| $lhs:temp_lit = $rhs:temp_lit) => do
+  | `(template_stx| $lhs:temp_lit = $rhs:temp_lit) => do
     let lExpr ← elabLit lhs
     let rExpr ← elabLit rhs
     return .eq lExpr rExpr
-  | `(template| $lhs:template $bin:temp_binop $rhs:template) => do
+  | `(template_stx| $lhs:template_stx $bin:temp_binop $rhs:template_stx) => do
       let binExpr ← elabBinOp bin
       let lExpr ← elabTemp lhs
       let rExpr ← elabTemp rhs
       return .bin binExpr lExpr rExpr
-  | `(template| $u:temp_unop $e:template) => do
+  | `(template_stx| $u:temp_unop $e:template_stx) => do
       let uExpr ← elabUnOp u
       let eExpr ← elabTemp e
       return .un uExpr eExpr
 
-  | `(template| $b:temp_binder $var:ident , $e:template) => do
+  | `(template_stx| $b:temp_binder $var:ident , $e:template_stx) => do
       let binderExpr ← elabBinder b
       let varIdx ← stxCheck var "x"
       let eExpr ← elabTemp e
       return .bind binderExpr varIdx eExpr
-  | `(template| $b:temp_binder $var:ident $vars:ident* , $e:template) => do
+  | `(template_stx| $b:temp_binder $var:ident $vars:ident* , $e:template_stx) => do
       let binderExpr ← elabBinder b
       let eExpr ← elabTemp e
       let varIdx ← stxCheck var "x"
       let varsIdx ← vars.mapM (stxCheck · "x")
       let inner ← varsIdx.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx pred) eExpr
       return .bind binderExpr varIdx inner
-  | `(template| ($e:template)) =>
+  | `(template_stx| ($e:template_stx)) =>
       elabTemp e
+  | _ => throwUnsupportedSyntax
+
+mutual
+partial def elabTempType : Syntax → MetaM tempExpr
+  | `(template_type| $t:template_stx) => elabTempTypeExpr t
+  | `(template_type| $lhs:template_type → $rhs:template_type) =>
+      return .bin .imp (← elabTempType lhs) (← elabTempType rhs)
+  | `(template_type| Prop) => return .lit (.sort (some 0))
+  | `(template_type| Type) => return .lit (.sort (some 1))
+  | `(template_type| Sort $n:num) => return .lit (.sort (some n.getNat))
+  | _ => throwUnsupportedSyntax
+
+-- Permissive version: accepts any tempLit (not just opHole), recurses via elabTempType
+partial def elabTempTypeExpr : Syntax → MetaM tempExpr
+  | `(template_stx| $lit:temp_lit) => return .lit (← elabLit lit)
+  | `(template_stx| $lhs:temp_lit = $rhs:temp_lit) =>
+      return .eq (← elabLit lhs) (← elabLit rhs)
+  | `(template_stx| $lhs:template_stx $bin:temp_binop $rhs:template_stx) => do
+      return .bin (← elabBinOp bin) (← elabTempTypeExpr lhs) (← elabTempTypeExpr rhs)
+  | `(template_stx| $u:temp_unop $e:template_stx) =>
+      return .un (← elabUnOp u) (← elabTempTypeExpr e)
+  | `(template_stx| $b:temp_binder $var:ident , $e:template_stx) => do
+      return .bind (← elabBinder b) (← stxCheck var "x") (← elabTempTypeExpr e)
+  | `(template_stx| ($e:template_stx)) => elabTempTypeExpr e
+  | _ => throwUnsupportedSyntax
+end
+
+-- Elaborates a single context entry into a (tempLit × tempExpr) pair
+def elabTempCtx :  TSyntax `template_ctx → MetaM (tempLit × tempExpr)
+  | `(template_ctx| $lit:temp_lit : $ty:template_type) =>
+      return (← elabLit lit, ← elabTempType ty)
   | _ => throwUnsupportedSyntax
 
 mutual
@@ -325,36 +379,39 @@ partial def delabLit : tempLit → MetaM (TSyntax `temp_lit)
     `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
 end
 
-def delabExpr : tempExpr → MetaM (TSyntax `template)
+def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
   | .lit l => do
     let stx ← delabLit l
-    `(template| $stx:temp_lit)
+    `(template_stx| $stx:temp_lit)
   | .eq l r => do
     let lStx ← delabLit l
     let rStx ← delabLit r
-    `(template| $lStx:temp_lit = $rStx:temp_lit)
+    `(template_stx| $lStx:temp_lit = $rStx:temp_lit)
   | .un _ e => do
     let stx ← delabExpr e
-    `(template| ¬ $stx:template)
+    `(template_stx| ¬ $stx:template_stx)
   | .bin op l r => do
     let lStx ← delabExpr l
     let rStx ← delabExpr r
     match op with
-    | .and => `(template| $lStx:template ∧ $rStx:template)
-    | .or =>  `(template| $lStx:template ∨ $rStx:template)
-    | .imp =>  `(template| $lStx:template → $rStx:template)
-    | .iff => `(template| $lStx:template ↔ $rStx:template)
+    | .and => `(template_stx| $lStx:template_stx ∧ $rStx:template_stx)
+    | .or =>  `(template_stx| $lStx:template_stx ∨ $rStx:template_stx)
+    | .imp =>  `(template_stx| $lStx:template_stx → $rStx:template_stx)
+    | .iff => `(template_stx| $lStx:template_stx ↔ $rStx:template_stx)
   | .bind op idx e => do
     let name := (tempLit.var idx).mkNameIdent
     let body ← delabExpr e
     match op with
-    | .forall => `(template| ∀ $name:ident, $body:template)
-    | .exists => `(template| ∃ $name:ident, $body:template)
+    | .forall => `(template_stx| ∀ $name:ident, $body:template_stx)
+    | .exists => `(template_stx| ∃ $name:ident, $body:template_stx)
 
-elab tk:"#test_delab " t:template : command =>
-  liftTermElabM do
-    let e ← elabTemp t
-    let t' ← delabExpr e
-    withRef tk <| logInfo m!"original: {t}\ndelabbed: {t'}"
+structure Template where
+  ctx : List (tempLit × tempExpr)
+  statement : tempExpr
+deriving Repr, BEq, ToExpr
 
--- #test_delab ∀ x1 x2, H1 x1 x2 = H1 x2 x1 → ∀ x3 x4, H2 x3 x4 = H2 x4 x3
+abbrev Template.addContext (T : Template) (t : (tempLit × tempExpr)) := {T with ctx := T.ctx.insert t}
+abbrev Template.addContext' (T : Template) (ts : List (tempLit × tempExpr)) := {T with ctx := ts ++ T.ctx}
+abbrev Template.setStatement (T : Template) (stx : TSyntax `template_stx) := do
+  let st ← elabTemp stx
+  return {T with statement := st}
