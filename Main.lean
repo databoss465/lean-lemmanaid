@@ -1,8 +1,11 @@
 import LeanLemmanaid
 
-set_option pp.proofs false
+set_option pp.proofs true
 
--- Sanity Checks
+/-
+## Sanity Check
+Testing examples that don't need Mathlib
+-/
 #check Nat.add_comm
 template comm := Nat.add_comm
 #show_template comm
@@ -70,6 +73,7 @@ template X1 := Nat.lcm_dvd_lcm_mul_left_right
 template comp_id := Function.comp_id
 #show_template comp_id
 #instantiate comp_id with #[_, id, _, Function.comp]
+-- Typing issue
 
 
 #check not_false_iff
@@ -92,7 +96,8 @@ template X2 := Nat.div_lt_iff_lt_mul
 template fin_exist := Fin.exists_iff
 #show_template fin_exist
 #instantiate fin_exist with #[Nat, Fin, _, LT.lt, Fin.mk]
--- Idi modda gudisipoina example
+-- Binder issue
+-- Idi modda gudisipoina example!!
 
 #check Rat.mkRat_eq_div
 template X4 := Rat.mkRat_eq_div
@@ -103,8 +108,12 @@ template X4 := Rat.mkRat_eq_div
 template list_rev := List.all_reverse
 #show_template list_rev
 #instantiate list_rev with #[_, List, List.reverse, Bool, List.all]
+-- Same typing issue here
 
 #check Array.getElem?_append_left
 template array_get := Array.getElem?_append_left
 #show_template array_get
 #instantiate array_get with #[Nat, LT.lt, _, Array, Array.size, HAppend.hAppend, Option, getElem?]
+-- Fix this. Some typing issue
+
+def main : IO Unit := pure ()
