@@ -101,14 +101,15 @@ partial def elabTempExpr' : tempExpr → TempElabM Expr
     | .or => return mkOr lExpr rExpr
     | .iff => return mkIff lExpr rExpr
     | .imp => return Expr.forallE `_ lExpr rExpr .default
-  | .bind op idx body => do
-      let fvar ← elabTempExpr' (.lit (.var idx))
-      let bodyExpr ← elabTempExpr' body
-      match op with
-      | .forall => mkForallFVars #[fvar] bodyExpr
-      | .exists =>
-          let lambdaBody ← mkLambdaFVars #[fvar] bodyExpr
-          mkAppM ``Exists #[lambdaBody]
+  | .bind op idx varTy body => do
+      let tyExpr ← elabTempExpr' varTy
+      withLocalDecl (mkVarName idx) .default tyExpr fun fvar => do
+        modify (·.insert (.lit (.var idx)) fvar)     -- so body's `.var idx` resolves here
+        let bodyExpr ← elabTempExpr' body
+        match op with
+        | .forall => mkForallFVars #[fvar] bodyExpr
+        | .exists => mkAppM ``Exists #[← mkLambdaFVars #[fvar] bodyExpr]
+
 
 partial def withContext {α : Type} (sortedCtx : List (tempLit × tempExpr))
   (k : TempElabM α) : TempElabM α := do

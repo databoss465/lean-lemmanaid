@@ -125,7 +125,7 @@ inductive tempExpr
   | eq : tempLit → tempLit → tempExpr
   | un : tempUnOp → tempExpr → tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
-  | bind : tempBinder → Nat → tempExpr → tempExpr
+  | bind : tempBinder → Nat → tempExpr → tempExpr → tempExpr
 deriving Repr, BEq, Hashable, ToExpr
 
 partial def tempExpr.contains (expr : tempExpr) (lit : tempLit) : Bool :=
@@ -134,7 +134,7 @@ partial def tempExpr.contains (expr : tempExpr) (lit : tempLit) : Bool :=
   | .eq l r => (l.contains lit) ∨ (r.contains lit)
   | .bin _ l r => (l.contains lit) ∨ (r.contains lit)
   | .un _ e => e.contains lit
-  | .bind _ _ e => e.contains lit
+  | .bind _ _ t e => (t.contains lit) ∨ (e.contains lit)
 
 partial def tempExpr.toString : tempExpr → String
   | .lit l =>
@@ -142,11 +142,11 @@ partial def tempExpr.toString : tempExpr → String
   | .eq l₁ l₂ =>
       s!"({l₁} = {l₂})"
   | .un op e =>
-      s!"{op} {tempExpr.toString e}"
+      s!"{op} {e.toString}"
   | .bin op e₁ e₂ =>
-      s!"{tempExpr.toString e₁} {op} {tempExpr.toString e₂}"
-  | .bind b n e =>
-      s!"{b} {n}. {tempExpr.toString e}"
+      s!"{e₁.toString} {op} {e₂.toString}"
+  | .bind b n t e =>
+      s!"{b} {n} {t.toString} {e.toString}"
 
 instance : ToString tempExpr where
   toString := tempExpr.toString
@@ -274,8 +274,7 @@ syntax temp_lit : template_stx                             -- Some literals, can
 
 syntax:50 temp_unop template_stx:51 : template_stx              -- Not
 syntax:35 template_stx:36 temp_binop template_stx:35 : template_stx     -- And/Or/Implies
-syntax temp_binder ident ", " template_stx:10 : template_stx     -- Forall/Exists
-syntax temp_binder ident+ ", " template_stx:10 : template_stx
+
 
 syntax "(" template_stx ")" : template_stx                    -- Grouping
 
@@ -287,10 +286,13 @@ syntax "Prop" : template_type
 syntax "Type" : template_type
 syntax "Sort " num : template_type
 
+syntax temp_binder ident ": " template_type ", " template_stx:10 : template_stx     -- Forall/Exists
+syntax temp_binder ident+ ": " template_type ", " template_stx:10 : template_stx
+
 declare_syntax_cat template_ctx
 syntax temp_lit " : " template_type : template_ctx
 
-
+mutual
 partial def elabTemp : Syntax → MetaM tempExpr
   | `(template_stx| $lit:temp_lit) => do
     let e ← elabLit lit
@@ -314,23 +316,25 @@ partial def elabTemp : Syntax → MetaM tempExpr
       let eExpr ← elabTemp e
       return .un uExpr eExpr
 
-  | `(template_stx| $b:temp_binder $var:ident , $e:template_stx) => do
+  | `(template_stx| $b:temp_binder $var:ident : $type:template_type , $e:template_stx) => do
       let binderExpr ← elabBinder b
       let varIdx ← stxCheck var "x"
       let eExpr ← elabTemp e
-      return .bind binderExpr varIdx eExpr
-  | `(template_stx| $b:temp_binder $var:ident $vars:ident* , $e:template_stx) => do
+      let bType ← elabTempType type
+      return .bind binderExpr varIdx bType eExpr
+  | `(template_stx| $b:temp_binder $var:ident $vars:ident* : $type:template_type , $e:template_stx) => do
       let binderExpr ← elabBinder b
       let eExpr ← elabTemp e
       let varIdx ← stxCheck var "x"
       let varsIdx ← vars.mapM (stxCheck · "x")
-      let inner ← varsIdx.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx pred) eExpr
-      return .bind binderExpr varIdx inner
+      let bType ← elabTempType type
+      let inner ← varsIdx.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx bType pred) eExpr
+      return .bind binderExpr varIdx bType inner
   | `(template_stx| ($e:template_stx)) =>
       elabTemp e
   | _ => throwUnsupportedSyntax
 
-mutual
+
 partial def elabTempType : Syntax → MetaM tempExpr
   | `(template_type| $t:template_stx) => elabTempTypeExpr t
   | `(template_type| $lhs:template_type → $rhs:template_type) =>
@@ -349,8 +353,9 @@ partial def elabTempTypeExpr : Syntax → MetaM tempExpr
       return .bin (← elabBinOp bin) (← elabTempTypeExpr lhs) (← elabTempTypeExpr rhs)
   | `(template_stx| $u:temp_unop $e:template_stx) =>
       return .un (← elabUnOp u) (← elabTempTypeExpr e)
-  | `(template_stx| $b:temp_binder $var:ident , $e:template_stx) => do
-      return .bind (← elabBinder b) (← stxCheck var "x") (← elabTempTypeExpr e)
+  | `(template_stx| $b:temp_binder $var:ident : $type:template_type, $e:template_stx) => do
+      return .bind (← elabBinder b) (← stxCheck var "x") (← elabTempType type) (← elabTempTypeExpr e)
+      -- May need support for multi-binding. Subject to Mathlib testing.
   | `(template_stx| ($e:template_stx)) => elabTempTypeExpr e
   | _ => throwUnsupportedSyntax
 end
@@ -379,7 +384,14 @@ partial def delabLit : tempLit → MetaM (TSyntax `temp_lit)
     `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
 end
 
-def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
+mutual
+partial def delabType : tempExpr → MetaM (TSyntax `template_type)
+  | .bin .imp l r => do
+    `(template_type| $(← delabType l):template_type → $(← delabType r):template_type)
+  | e => do
+    `(template_type| $(← delabExpr e):template_stx)
+
+partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
   | .lit l => do
     let stx ← delabLit l
     `(template_stx| $stx:temp_lit)
@@ -398,12 +410,14 @@ def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
     | .or =>  `(template_stx| $lStx:template_stx ∨ $rStx:template_stx)
     | .imp =>  `(template_stx| $lStx:template_stx → $rStx:template_stx)
     | .iff => `(template_stx| $lStx:template_stx ↔ $rStx:template_stx)
-  | .bind op idx e => do
+  | .bind op idx t e => do
     let name := (tempLit.var idx).mkNameIdent
+    let type ← delabType t
     let body ← delabExpr e
     match op with
-    | .forall => `(template_stx| ∀ $name:ident, $body:template_stx)
-    | .exists => `(template_stx| ∃ $name:ident, $body:template_stx)
+    | .forall => `(template_stx| ∀ $name:ident : $type:template_type, $body:template_stx)
+    | .exists => `(template_stx| ∃ $name:ident : $type:template_type, $body:template_stx)
+end
 
 structure Template where
   ctx : List (tempLit × tempExpr)
