@@ -108,6 +108,7 @@ template X4 := Rat.mkRat_eq_div
 #check List.all_reverse
 template list_rev := List.all_reverse
 #show_template list_rev
+#instantiate list_rev with #[_, List, Bool, _, _]
 #instantiate list_rev with #[_, List, Bool, List.reverse, List.all]
 
 #check Array.getElem?_append_left
@@ -118,7 +119,17 @@ template array_get := Array.getElem?_append_left
 #check Nat.mul_right_cancel
 template cancel := Nat.mul_right_cancel
 #show_template cancel
+#instantiate cancel with #[Nat, 0, LT.lt, HMul.hMul]
 
+#check congrFun
+template congr_temp := congrFun
+#show_template congr_temp
+#instantiate congr_temp with #[_, _, _, _]
+
+#check Function.rightInverse_of_injective_of_leftInverse
+template X5 := Function.rightInverse_of_injective_of_leftInverse
+#show_template X5
+#instantiate X5 with #[_, _, Function.Injective, Function.LeftInverse, Function.RightInverse]
 
 
 def main : IO Unit := pure ()

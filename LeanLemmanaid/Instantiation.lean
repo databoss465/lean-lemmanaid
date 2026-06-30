@@ -63,6 +63,9 @@ def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (te
         -- checking: at this point the whole statement is built and every operator's
         -- type parameters have been pinned, so instance goals are concrete.
         synthesizeSyntheticMVarsNoPostponing
+        -- TODO: Type Polymorphism ↦ set `ignoreStuckTC := true`, then catch them and bind outside with `forall`
+        -- Need to find a good place to do it? because [Typeclass T] should be immediately after {T : Sort u_1}
+        -- But this synthesis is happening after all the fvar declarations...
         let body ← instantiateMVars body
         check body
         let result ← mkForallFVars bound body
@@ -154,6 +157,16 @@ def instantiateTemplate' (t : Template) (subst : Array Expr) : TermElabM Expr :=
     throwError "instantiateTemplate' (blind swap) failed: {ex.toMessageData}"
 
 
+/-- Rename the universe parameters `abstractMVars` invents for leftover level mvars
+(`_abstMVar.0`, …) to Lean-style `u_1, u_2, …`, so polymorphic output reads like a
+real Lean declaration (`Sort u_1` instead of `Sort _abstMVar.0`). -/
+def renameUnivParams (paramNames : Array Name) (e : Expr) : Expr :=
+  if paramNames.isEmpty then e
+  else
+    let newLevels := (List.range paramNames.size).map fun i =>
+      Level.param (Name.mkSimple s!"u_{i + 1}")
+    e.instantiateLevelParams paramNames.toList newLevels
+
 def instantiateTemplate (t : Template) (substStx : Array Term) : TermElabM Expr := do
   match topologicalSort t.ctx with
   | .error err => throwError m!"Check for circular type dependency: {err}"
@@ -164,7 +177,7 @@ def instantiateTemplate (t : Template) (substStx : Array Term) : TermElabM Expr 
       synthesizeSyntheticMVarsNoPostponing
       let finalResult ← instantiateMVars result
       let abstractResult ← Lean.Meta.abstractMVars finalResult
-      let thm := abstractResult.expr
+      let thm := renameUnivParams abstractResult.paramNames abstractResult.expr
       let finalThm ← Lean.Meta.lambdaTelescope thm fun fvars body => do
         Lean.Meta.mkForallFVars fvars body
       return finalThm

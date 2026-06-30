@@ -286,8 +286,11 @@ mutual
     match e with
     | .fvar fvarId =>
         let s ← get
+        let ty ← liftM <| whnf (← inferType e)
         if let some pair := s.vars.get? fvarId then
           return .var pair.1
+        if ty.isForall then
+          return .opHole (← getOpIdx e).1 #[]
         if ← liftM <| isPropSafe e then
           return .opHole (← getOpIdx e).1 #[]
         else

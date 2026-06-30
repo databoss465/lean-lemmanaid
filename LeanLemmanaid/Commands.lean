@@ -32,6 +32,11 @@ def showTemplate (t : Template) : TermElabM Unit := do
       let action : TempElabM Unit := do
         withContext sortedCtx do
           let prop ← elabTempExpr' t.statement
+          let mut st : CollectLevelMVars.State := {}
+          st ← (← getLCtx).foldlM (fun st decl => pure (collectLevelMVars st decl.type)) st
+          st := collectLevelMVars st prop
+          for (lmvar, i) in st.result.zipIdx do
+            assignLevelMVar lmvar (.param (Name.mkSimple s!"u_{i + 1}"))
           let dummyGoal ← mkFreshExprMVar prop
           logInfo (MessageData.ofGoal dummyGoal.mvarId!)
       let _ ← action.run {}
