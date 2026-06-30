@@ -3,6 +3,7 @@ import LeanLemmanaid.Template
 import LeanLemmanaid.TypedAbstraction
 import LeanLemmanaid.Elaboration
 import LeanLemmanaid.TempEnvironment
+import LeanLemmanaid.Instantiation
 
 open Lean Meta Elab Command Term
 open TypedAbstraction
@@ -27,6 +28,7 @@ def showTemplate (t : Template) : TermElabM Unit := do
       throwError m!"Check for circular type dependency: {err}"
 
   | .ok sortedCtx =>
+      -- `TermElabM` actions can be lifted into `TempElabM`, but not vice versa. Need to run
       let action : TempElabM Unit := do
         withContext sortedCtx do
           let prop ← elabTempExpr' t.statement
@@ -51,118 +53,6 @@ elab tk:"#abstract " id:ident : command =>
   let t ← abstractTheorem name
   withRef tk <| showTemplate t
 
--- def instantiateTemplate (expr : tempExpr) (subst : Array Expr) : TermElabM Expr := do
---   let (_, s) ← (exprInfer expr).run {}
---   let thm ← withFullContext s fun ctx => do
---     let e₀ ← elabTempExpr expr ctx.termMap
---     let e₁ ← instantiateMVars e₀
---     -- logInfo s!"{e₁}"
---     let e₂ ← Lean.Meta.mkForallFVars (ctx.vars.map (fun p => p.2)) e₁
---     let params := ctx.typeParams ++ (ctx.consts.map (fun p => p.2)) ++ (ctx.ops.map (fun p => p.2))
---     let template := e₂.abstract params
---     if subst.size != params.size then
---       throwError m!"Arity mismatch! Template has {params.size} variables, but input has {subst.size} arguments."
---     let result := template.instantiateRev subst
---     try
---       check result
---       Lean.Elab.Term.synthesizeSyntheticMVarsNoPostponing
---       let finalResult ← instantiateMVars result
---       let abstractResult ← Lean.Meta.abstractMVars finalResult
---       let finalTheorem := abstractResult.expr
---       let thm ← Lean.Meta.lambdaTelescope finalTheorem fun fvars body => do
---         Lean.Meta.mkForallFVars fvars body
---       pure thm
---     catch ex =>
---       throwError "instantiateTemplate failed: {ex.toMessageData}"
---   return thm
-
-def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (tempLit × tempExpr)) : TempElabM Expr := do
-  let rec go (ctx : List (tempLit × tempExpr)) (argIdx : Nat) : TempElabM (Expr × Nat) := do
-    match ctx with
-    | [] =>
-        let body ← elabTempExpr' t.statement
-        -- Resolve deferred typeclass mvars (registered by applyExplicitArgs) BEFORE
-        -- checking: at this point the whole statement is built and every operator's
-        -- type parameters have been pinned, so instance goals are concrete.
-        synthesizeSyntheticMVarsNoPostponing
-        let body ← instantiateMVars body
-        check body
-        let s ← get
-        let mut fvars := #[]
-        for (v, _) in sortedCtx do
-          match v with
-          | .var .. =>
-              let some fvar := s.get? (.lit v)
-                | throwError m!"{repr v} not found!"
-              fvars := fvars.push fvar
-          | _ => continue
-        let result ← mkForallFVars fvars body
-        return (result, argIdx)
-    | (hole, typeExpr) :: rest =>
-        let ty ← elabTempExpr' typeExpr
-        match hole with
-        | .var .. =>
-            withLocalDecl (hole.mkName) BinderInfo.default ty fun fvar => do
-              modify (fun env => env.insert (.lit hole) fvar)
-              go rest argIdx
-        | .typeHole .. | .const .. =>
-            if h : argIdx < substStx.size then
-              let arg ← elabTerm substStx[argIdx] (some ty)
-              modify (fun env => env.insert (.lit hole) arg)
-              go rest (argIdx + 1)
-            else
-              throwError m!"Arity mismatch! Template expects more than {substStx.size} arguments."
-        | .opHole .. =>
-            if h : argIdx < substStx.size then
-              -- Prefer elaborating the operator against its recorded (instance-
-              -- stripped) type. This pins implicit type parameters that are fixed by
-              -- the RESULT type rather than by an explicit argument (e.g. `Int.cast`'s
-              -- `R`, which leaves `IntCast ?R` stuck otherwise) and gives `_`
-              -- placeholders a concrete function type so they can be applied.
-              --
-              -- But for operators whose genuine type contains an instance binder the
-              -- recorded type lacks (e.g. `ite`'s `[Decidable c]`, which sits after an
-              -- explicit arg and was stripped during abstraction), this elaboration
-              -- fails defeq. In that case fall back to elaborating with no expected
-              -- type, letting the instance binder survive to the application site
-              -- where `applyExplicitArgs` registers it as a typeclass mvar to be
-              -- synthesized once its argument is concrete.
-              let arg ← show TermElabM Expr from do
-                let st ← saveState
-                try
-                  elabTerm substStx[argIdx] (some ty)
-                catch _ =>
-                  st.restore
-                  elabTerm substStx[argIdx] none
-              modify (fun env => env.insert (.lit hole) arg)
-              go rest (argIdx + 1)
-            else
-              throwError m!"Arity mismatch! Template expects more than {substStx.size} arguments."
-        | .sort .. =>
-            withLocalDecl (hole.mkName) BinderInfo.implicit ty fun fvar => do
-              modify (fun env => env.insert (.lit hole) fvar)
-              go rest argIdx
-  let (result, argCount) ← go sortedCtx 0
-  if argCount != substStx.size then
-    throwError m!"Arity mismatch! Template has {argCount} variables, but input has {substStx.size} arguments."
-  return result
-
-def instantiateTemplate (t : Template) (substStx : Array Term) : TermElabM Expr := do
-  match topologicalSort t.ctx with
-  | .error err => throwError m!"Check for circular type dependency: {err}"
-  | .ok sortedCtx =>
-    try
-      let result ← (instantiateCore t substStx sortedCtx).run' {}
-      check result
-      synthesizeSyntheticMVarsNoPostponing
-      let finalResult ← instantiateMVars result
-      let abstractResult ← Lean.Meta.abstractMVars finalResult
-      let thm := abstractResult.expr
-      let finalThm ← Lean.Meta.lambdaTelescope thm fun fvars body => do
-        Lean.Meta.mkForallFVars fvars body
-      return finalThm
-    catch ex =>
-      throwError "instantiateTemplate failed: {ex.toMessageData}"
 
 elab tk:"#instantiate" name:ident "with" "#[" args:term,* "]" : command =>
   liftTermElabM do
@@ -173,6 +63,8 @@ elab tk:"#instantiate" name:ident "with" "#[" args:term,* "]" : command =>
         withRef name <| throwError "Unknown template `{name}`"
     | some t =>
         let thm ← instantiateTemplate t (args.getElems)
+        -- let subst ← args.getElems.mapM (fun a => elabTerm a none)
+        -- let thm ← instantiateTemplate' t  subst
         withRef tk <| logInfo m!"{thm}"
 
 elab "template " name:ident " := " thm:ident : command => do

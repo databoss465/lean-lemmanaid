@@ -181,6 +181,28 @@ def isPropSafe (e : Expr) : MetaM Bool := do
   catch _ =>
     return false
 
+/-- True if `e` mentions no *value-level* free variables: every fvar it contains is
+either a type (its type is a `Sort`) or a typeclass instance (its type is a class).
+Such an expression is a ground value — e.g. `(1 : G)`, which is `OfNat.ofNat G 1 inst`
+and only "freely" mentions the abstracted type parameter `G` and its `Group` instance —
+so it may be collapsed to a single constant even though it is not syntactically closed.
+A genuine value variable (e.g. `a : G`) makes this return `false`, blocking collapse. -/
+def hasNoValueFVars (e : Expr) : MetaM Bool := do
+  let lctx ← getLCtx
+  for fvarId in (Lean.collectFVars {} e).fvarIds do
+    -- An fvar may be out of scope here: `abstractContext` re-abstracts stored types
+    -- (e.g. `i < n`) after the binder that introduced `i` has closed. A dangling fvar is
+    -- always a value variable that was abstracted earlier, so treat "not in scope" as
+    -- blocking — never call `inferType` on it (that would throw "unknown free variable").
+    let some decl := lctx.find? fvarId | return false
+    let ty := decl.type
+    if (← whnf ty).isSort then
+      continue                         -- a type parameter (e.g. `G : Type`)
+    if (← isClass? ty).isSome then
+      continue                         -- a typeclass instance (e.g. `inst : Group G`)
+    return false                       -- a genuine value variable (e.g. `a : G`)
+  return true
+
 mutual
   partial def abstractProp (e : Expr) : AbstractM tempExpr := do
     let e := e.consumeMData
@@ -252,7 +274,10 @@ mutual
   partial def abstractTerm (e : Expr) : AbstractM tempLit := do
     let e := e.consumeMData
 
-    if !(e.hasFVar || e.hasMVar || e.hasLooseBVars) then
+    -- Collapse a ground value to a single constant. We allow the expression to mention
+    -- type-parameter / instance fvars (e.g. the `G` in `(1 : G)`); only *value* fvars
+    -- block the collapse. Mvars and loose bvars still disqualify.
+    if !(e.hasMVar || e.hasLooseBVars) && (← liftM <| hasNoValueFVars e) then
       if !(← liftM <| isProp e) then
         let ty ← liftM <| whnf (← inferType e)
         if !ty.isForall && !ty.isSort then
@@ -274,9 +299,14 @@ mutual
         | .const ``Eq _ | .const ``Not _ | .const ``And _ | .const ``Or _ | .const ``Exists _ =>
             throwError m!"Logical proposition used as a term: {e}"
         | _ =>
-            let (implArgs, explArgs) ← liftM <| sortAppArgs fn args
+            let (implArgs, explArgs) ← liftM <| sortAppArgsWithTypes fn args
             let partialAppFn := mkAppN fn implArgs
-            let argLits ← explArgs.mapM abstractTerm
+            -- Route each explicit arg through its expected domain: a `Sort`-typed argument
+            -- (e.g. the `G` in `IsRightCancelMul G`) becomes a type hole, while ordinary
+            -- value arguments stay term variables. Without this, a type passed as an
+            -- explicit argument would be abstracted as a `.var` (`x1`) instead of `T1`.
+            let argLits ← explArgs.mapM fun (arg, domain) =>
+              abstractTypeArgWithExpected arg domain
             return .opHole (← getOpIdx partialAppFn).1 argLits
     | .const .. =>
         if ← liftM <| isProp e then
@@ -443,18 +473,33 @@ partial def topologicalSort (remaining : List (tempLit × tempExpr))
   (sorted : List (tempLit × tempExpr) := []) : Except String (List (tempLit × tempExpr)) :=
   if remaining.isEmpty then
     return sorted
-  else let readyOpt := remaining.find? fun (lit, typeExpr) =>
-    remaining.all fun (otherLit, _) =>
-      if lit == otherLit then
-        true
-      else
-        !(typeExpr.contains otherLit)
-  match readyOpt with
-  | some readyElem =>
-      let nextRemaining := remaining.filter (fun (l, _) => l != readyElem.1)
-      topologicalSort nextRemaining (sorted ++ [readyElem])
-  | none =>
-      Except.error "Circular dependency detected in the extracted context!"
+  else
+    -- An element is ready once every other element it depends on has been placed.
+    let isReady := fun (lit, typeExpr) =>
+      remaining.all fun (otherLit, _) =>
+        if lit == otherLit then
+          true
+        else
+          !(typeExpr.contains otherLit)
+    -- A type-level hole (or sort). Among the ready elements we always prefer these
+    -- so that types are emitted before value variables whenever no genuine
+    -- dependency forces otherwise. This keeps value variables out of scope while a
+    -- type hole is being instantiated, so an unfilled type hole (`_`) cannot capture
+    -- a value variable when `abstractMVars` later generalizes it.
+    let isTypeLike := fun (lit : tempLit) =>
+      match lit with
+      | .typeHole .. | .sort .. => true
+      | _ => false
+    let readyOpt :=
+      match remaining.find? (fun e => isTypeLike e.1 && isReady e) with
+      | some e => some e
+      | none => remaining.find? isReady
+    match readyOpt with
+    | some readyElem =>
+        let nextRemaining := remaining.filter (fun (l, _) => l != readyElem.1)
+        topologicalSort nextRemaining (sorted ++ [readyElem])
+    | none =>
+        Except.error "Circular dependency detected in the extracted context!"
 
 partial def abstractTypedTemplate (e : Expr) : AbstractM Template := do
   let e := e.consumeMData

@@ -25,11 +25,14 @@ template assoc := Nat.add_assoc
 #show_template assoc
 #instantiate assoc with #[Nat, HAdd.hAdd]
 
-
 #check Nat.add_zero
+#check Fin.add_zero
+variable (n : Nat)
 template right_id := Nat.add_zero
 #show_template right_id
 #instantiate right_id with #[Nat, 0, HAdd.hAdd]
+#instantiate right_id with #[Fin (_+1), 0, HAdd.hAdd]
+#instantiate right_id with #[Fin _, _, HAdd.hAdd]
 
 
 #check Int.neg_add
@@ -40,13 +43,12 @@ template neg_distrib := Int.neg_add
 #check Vector.add_comm
 template depdt_comm := Vector.add_comm
 #show_template depdt_comm
-#instantiate depdt_comm with #[Int, HAdd.hAdd, Nat, Vector, HAdd.hAdd]
+#instantiate depdt_comm with #[Int, Nat, Vector, HAdd.hAdd, HAdd.hAdd]
 
 #check Nat.add_mul
 template right_distrib := Nat.add_mul
 #show_template right_distrib
--- #inst_temp H2(H1 x1 x2)x3 = H1(H2 x1 x3)(H2 x2 x3)
---   with #[Nat, _, HAdd.hAdd, HMul.hMul]
+#instantiate right_distrib with #[Nat, HAdd.hAdd, HMul.hMul]
 
 #check Nat.add_div
 template div_right_distrib := Nat.add_div
@@ -72,8 +74,7 @@ template X1 := Nat.lcm_dvd_lcm_mul_left_right
 #check Function.comp_id
 template comp_id := Function.comp_id
 #show_template comp_id
-#instantiate comp_id with #[_, id, _, Function.comp]
--- Typing issue
+#instantiate comp_id with #[_, _, id, Function.comp]
 
 
 #check not_false_iff
@@ -84,7 +85,7 @@ template exclusive := not_false_iff
 #instantiate exclusive with #[False, True]
 
 template X0 := iff_iff_eq
-#instantiate X0 with #[_, _]
+-- #instantiate X0 with #[_, _]
 
 #check Nat.div_lt_iff_lt_mul
 template X2 := Nat.div_lt_iff_lt_mul
@@ -107,13 +108,17 @@ template X4 := Rat.mkRat_eq_div
 #check List.all_reverse
 template list_rev := List.all_reverse
 #show_template list_rev
-#instantiate list_rev with #[_, List, List.reverse, Bool, List.all]
--- Same typing issue here
+#instantiate list_rev with #[_, List, Bool, List.reverse, List.all]
 
 #check Array.getElem?_append_left
 template array_get := Array.getElem?_append_left
 #show_template array_get
-#instantiate array_get with #[Nat, LT.lt, _, Array, Array.size, HAppend.hAppend, Option, getElem?]
--- Fix this. Some typing issue
+#instantiate array_get with #[Nat, _, Array, Option, Array.size, LT.lt, HAppend.hAppend, getElem?]
+
+#check Nat.mul_right_cancel
+template cancel := Nat.mul_right_cancel
+#show_template cancel
+
+
 
 def main : IO Unit := pure ()

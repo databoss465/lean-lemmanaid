@@ -5,3 +5,4 @@ import LeanLemmanaid.Commands
 import LeanLemmanaid.Template
 import LeanLemmanaid.TypedAbstraction
 import LeanLemmanaid.Elaboration
+import LeanLemmanaid.Instantiation
