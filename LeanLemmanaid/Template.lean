@@ -19,7 +19,7 @@ def mkOpName (idx : Nat) := Name.mkSimple s!"H{idx}"
 def mkTypeName (idx : Nat) := Name.mkSimple s!"T{idx}"
 
 -- Abstract Syntax Tree
-
+-- GET RID OF TEMPLIT OMFG
 inductive tempLit
   | const : Nat → tempLit
   | var : Nat → tempLit
