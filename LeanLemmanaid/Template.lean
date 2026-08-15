@@ -20,59 +20,59 @@ def mkTypeName (idx : Nat) := Name.mkSimple s!"T{idx}"
 
 -- Abstract Syntax Tree
 
-inductive tempLit
-  | const : Nat → tempLit
-  | var : Nat → tempLit
-  | opHole : Nat → Array tempLit → tempLit
-  | typeHole : Nat → Array tempLit → tempLit
-  | sort : Option Nat → tempLit
-deriving Repr, BEq, Hashable, ToExpr
+-- inductive tempLit
+--   | const : Nat → tempLit
+--   | var : Nat → tempLit
+--   | opHole : Nat → Array tempLit → tempLit
+--   | typeHole : Nat → Array tempLit → tempLit
+--   | sort : Option Nat → tempLit
+-- deriving Repr, BEq, Hashable, ToExpr
 
-partial def tempLit.contains (t : tempLit) (l : tempLit) : Bool :=
-  match t with
-  | l'@(.const ..) | l'@(.var ..) |l'@(.sort ..) => l' == l
-  | .opHole idx args =>
-      (match l with | .opHole idx' _ => idx == idx' | _ => False) ||
-      args.any (fun arg => arg.contains l)
-  | .typeHole idx args =>
-      (match l with | .typeHole idx' _ => idx == idx' | _ => False) ||
-     args.any (fun arg => arg.contains l)
+-- partial def tempLit.contains (t : tempLit) (l : tempLit) : Bool :=
+--   match t with
+--   | l'@(.const ..) | l'@(.var ..) |l'@(.sort ..) => l' == l
+--   | .opHole idx args =>
+--       (match l with | .opHole idx' _ => idx == idx' | _ => False) ||
+--       args.any (fun arg => arg.contains l)
+--   | .typeHole idx args =>
+--       (match l with | .typeHole idx' _ => idx == idx' | _ => False) ||
+--      args.any (fun arg => arg.contains l)
 
-def tempLit.mkName (l : tempLit) :=
-  match l with
-  | .const idx => Name.mkSimple s!"c{idx}"
-  | .var idx => Name.mkSimple s!"x{idx}"
-  | .opHole idx _ => Name.mkSimple s!"H{idx}"
-  | .typeHole idx _ => Name.mkSimple s!"T{idx}"
-  | .sort (some idx) => Name.mkSimple s!"Sort{idx}"
-  | .sort none => Name.mkSimple s!"Sort_u"
+-- def tempLit.mkName (l : tempLit) :=
+--   match l with
+--   | .const idx => Name.mkSimple s!"c{idx}"
+--   | .var idx => Name.mkSimple s!"x{idx}"
+--   | .opHole idx _ => Name.mkSimple s!"H{idx}"
+--   | .typeHole idx _ => Name.mkSimple s!"T{idx}"
+--   | .sort (some idx) => Name.mkSimple s!"Sort{idx}"
+--   | .sort none => Name.mkSimple s!"Sort_u"
 
-abbrev tempLit.mkNameIdent (l : tempLit) := mkIdent (l.mkName)
+-- abbrev tempLit.mkNameIdent (l : tempLit) := mkIdent (l.mkName)
 
-partial def tempLit.toString : tempLit → String
-  | .const n =>
-      s!"c{n}"
-  | .var n =>
-      s!"x{n}"
-  | .opHole n args =>
-      if args.isEmpty then
-        s!"H{n}"
-      else
-        s!"H{n} {" ".intercalate (args.toList.map tempLit.toString)}"
-  | .typeHole n args =>
-      if args.isEmpty then
-        s!"T{n}"
-      else
-        s!"T{n} {" ".intercalate (args.toList.map tempLit.toString)}"
-  | .sort (some 0) =>
-      s!"Prop"
-  | .sort (some n) =>
-      s!"Type {n}"
-  | .sort none =>
-      s!"Type u_1"
+-- partial def tempLit.toString : tempLit → String
+--   | .const n =>
+--       s!"c{n}"
+--   | .var n =>
+--       s!"x{n}"
+--   | .opHole n args =>
+--       if args.isEmpty then
+--         s!"H{n}"
+--       else
+--         s!"H{n} {" ".intercalate (args.toList.map tempLit.toString)}"
+--   | .typeHole n args =>
+--       if args.isEmpty then
+--         s!"T{n}"
+--       else
+--         s!"T{n} {" ".intercalate (args.toList.map tempLit.toString)}"
+--   | .sort (some 0) =>
+--       s!"Prop"
+--   | .sort (some n) =>
+--       s!"Type {n}"
+--   | .sort none =>
+--       s!"Type u_1"
 
-instance : ToString tempLit where
-  toString := tempLit.toString
+-- instance : ToString tempLit where
+--   toString := tempLit.toString
 
 inductive tempUnOp
  | not
@@ -121,26 +121,55 @@ instance : ToString tempBinder where
 
 
 inductive tempExpr
-  | lit : tempLit → tempExpr
-  | eq : tempLit → tempLit → tempExpr
+  | const : Nat → tempExpr
+  | var : Nat → tempExpr
+  | opHole : Nat → Array tempExpr → tempExpr
+  | typeHole : Nat → Array tempExpr → tempExpr
+  | sort : Option Nat → tempExpr
+  | eq : tempExpr → tempExpr → tempExpr
   | un : tempUnOp → tempExpr → tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
   | bind : tempBinder → Nat → tempExpr → tempExpr → tempExpr
 deriving Repr, BEq, Hashable, ToExpr
 
-partial def tempExpr.contains (expr : tempExpr) (lit : tempLit) : Bool :=
+partial def tempExpr.contains (expr tgt: tempExpr) : Bool :=
   match expr with
-  | .lit l => l.contains lit
-  | .eq l r => (l.contains lit) ∨ (r.contains lit)
-  | .bin _ l r => (l.contains lit) ∨ (r.contains lit)
-  | .un _ e => e.contains lit
-  | .bind _ _ t e => (t.contains lit) ∨ (e.contains lit)
+  | .const .. | .var .. | .sort .. =>
+    expr == tgt
+  | .opHole idx args =>
+    (match tgt with | .opHole idx' _ => idx == idx' | _ => False) ||
+      args.any (fun arg ↦ arg.contains tgt)
+  | .typeHole idx args =>
+    (match tgt with | .typeHole idx' _ => idx == idx' | _ => False) ||
+      args.any (fun arg ↦ arg.contains tgt)
+  | .eq l r => (l.contains tgt) ∨ (r.contains tgt)
+  | .bin _ l r => (l.contains tgt) ∨ (r.contains tgt)
+  | .un _ e => e.contains tgt
+  | .bind _ _ t e => (t.contains tgt) ∨ (e.contains tgt)
 
 partial def tempExpr.toString : tempExpr → String
-  | .lit l =>
-      l.toString
+  | .const n =>
+      s!"c{n}"
+  | .var n =>
+      s!"x{n}"
+  | .opHole n args =>
+      if args.isEmpty then
+        s!"H{n}"
+      else
+        s!"H{n} {" ".intercalate (args.toList.map tempExpr.toString)}"
+  | .typeHole n args =>
+      if args.isEmpty then
+        s!"T{n}"
+      else
+        s!"T{n} {" ".intercalate (args.toList.map tempExpr.toString)}"
+  | .sort (some 0) =>
+      s!"Prop"
+  | .sort (some n) =>
+      s!"Type {n}"
+  | .sort none =>
+      s!"Type u_1"
   | .eq l₁ l₂ =>
-      s!"({l₁} = {l₂})"
+      s!"({l₁.toString} = {l₂.toString})"
   | .un op e =>
       s!"{op} {e.toString}"
   | .bin op e₁ e₂ =>
@@ -150,6 +179,18 @@ partial def tempExpr.toString : tempExpr → String
 
 instance : ToString tempExpr where
   toString := tempExpr.toString
+
+def tempExpr.mkName (l : tempExpr) :=
+  match l with
+  | .const idx => Name.mkSimple s!"c{idx}"
+  | .var idx => Name.mkSimple s!"x{idx}"
+  | .opHole idx _ => Name.mkSimple s!"H{idx}"
+  | .typeHole idx _ => Name.mkSimple s!"T{idx}"
+  | .sort (some idx) => Name.mkSimple s!"Sort{idx}"
+  | .sort none => Name.mkSimple s!"Sort_u"
+  | _ => Name.mkSimple s!"no_name" -- junk_value
+
+abbrev tempExpr.mkNameIdent (l : tempExpr) := mkIdent (l.mkName)
 
 -- Syntax for templates
 
@@ -169,37 +210,37 @@ syntax temp_lit_atom temp_lit_atom+ : temp_lit
 mutual    -- Functions that call each other
 
 /- Function to elaborate atoms, i.e. x1, (x1), etc.. -/
-  partial def elabAtom (stx : Syntax) : MetaM tempLit := do
+  partial def elabAtom (stx : Syntax) : MetaM tempExpr := do
     match stx with
     | `(temp_lit_atom| $id:ident) =>
       let nameStr := id.getId.toString
       if nameStr.startsWith "x" then
         let k ← stxCheck id "x"
-        return tempLit.var k
+        return tempExpr.var k
       else if nameStr.startsWith "c" then
         let k ← stxCheck id "c"
-        return tempLit.const k
+        return tempExpr.const k
       -- H"num" -> Operator Hole
       else if nameStr.startsWith "H" then
         let n ← stxCheck id "H"
-        return tempLit.opHole n #[]
+        return tempExpr.opHole n #[]
       else if nameStr.startsWith "T" then
         let n ← stxCheck id "T"
-        return tempLit.typeHole n #[]
+        return tempExpr.typeHole n #[]
       else if nameStr == "Sort_u" then
-        return tempLit.sort none
+        return tempExpr.sort none
       else if nameStr.startsWith "Sort" then
         let n ← stxCheck id "Sort"
-        return tempLit.sort (some n)
+        return tempExpr.sort (some n)
       else if nameStr == "Prop" then
-        return tempLit.sort (some 0)
+        return tempExpr.sort (some 0)
       else
         throwErrorAt id s!"Unknown Lemmanaid identifier prefix for '{nameStr}'. Expected x, H, or T."
     -- If there's a paranthesis
     | `(temp_lit_atom| ( $inner:temp_lit ) ) => elabLit inner
     | _ => throwUnsupportedSyntax
 
-  partial def elabLit (stx : Syntax) : MetaM tempLit := do
+  partial def elabLit (stx : Syntax) : MetaM tempExpr := do
     match stx with
     | `(temp_lit| $atm:temp_lit_atom) => elabAtom atm
     | `(temp_lit| $fnAtom:temp_lit_atom $args:temp_lit_atom*) => do
@@ -211,13 +252,13 @@ mutual    -- Functions that call each other
           let mut argExprs := #[]
           for arg in args do
             argExprs := argExprs.push (← elabAtom arg)
-          return tempLit.opHole opIdx argExprs
+          return tempExpr.opHole opIdx argExprs
         else if nameStr.startsWith "T" then
           let opIdx ← stxCheck id "T"
           let mut argExprs := #[]
           for arg in args do
             argExprs := argExprs.push (← elabAtom arg)
-          return tempLit.typeHole opIdx argExprs
+          return tempExpr.typeHole opIdx argExprs
         else
           throwErrorAt id "Application head must be an operator starting with 'H' (e.g., H1)"
 
@@ -298,7 +339,7 @@ partial def elabTemp : Syntax → MetaM tempExpr
     let e ← elabLit lit
     match e with
     | .opHole _ _ =>
-      return .lit e
+      return e
     | .var _  | .const _=>
       throwErrorAt lit "Only operator applications can be Propositions"
     | _ => throwUnsupportedSyntax
@@ -339,14 +380,14 @@ partial def elabTempType : Syntax → MetaM tempExpr
   | `(template_type| $t:template_stx) => elabTempTypeExpr t
   | `(template_type| $lhs:template_type → $rhs:template_type) =>
       return .bin .imp (← elabTempType lhs) (← elabTempType rhs)
-  | `(template_type| Prop) => return .lit (.sort (some 0))
-  | `(template_type| Type) => return .lit (.sort (some 1))
-  | `(template_type| Sort $n:num) => return .lit (.sort (some n.getNat))
+  | `(template_type| Prop) => return .sort (some 0)
+  | `(template_type| Type) => return .sort (some 1)
+  | `(template_type| Sort $n:num) => return .sort (some n.getNat)
   | _ => throwUnsupportedSyntax
 
 -- Permissive version: accepts any tempLit (not just opHole), recurses via elabTempType
 partial def elabTempTypeExpr : Syntax → MetaM tempExpr
-  | `(template_stx| $lit:temp_lit) => return .lit (← elabLit lit)
+  | `(template_stx| $lit:temp_lit) => return (← elabLit lit)
   | `(template_stx| $lhs:temp_lit = $rhs:temp_lit) =>
       return .eq (← elabLit lhs) (← elabLit rhs)
   | `(template_stx| $lhs:template_stx $bin:temp_binop $rhs:template_stx) => do
@@ -361,20 +402,21 @@ partial def elabTempTypeExpr : Syntax → MetaM tempExpr
 end
 
 -- Elaborates a single context entry into a (tempLit × tempExpr) pair
-def elabTempCtx :  TSyntax `template_ctx → MetaM (tempLit × tempExpr)
+def elabTempCtx :  TSyntax `template_ctx → MetaM (tempExpr × tempExpr)
   | `(template_ctx| $lit:temp_lit : $ty:template_type) =>
       return (← elabLit lit, ← elabTempType ty)
   | _ => throwUnsupportedSyntax
 
 mutual
-partial def delabAtom : tempLit → MetaM (TSyntax `temp_lit_atom)
+partial def delabAtom : tempExpr → MetaM (TSyntax `temp_lit_atom)
   | t@(.var _) | t@(.const _) | t@(.sort _) =>
     `(temp_lit_atom| $(t.mkNameIdent):ident)
   | t@(.opHole ..) | t@(.typeHole ..) => do
     let inner ← delabLit t
     `(temp_lit_atom| ($inner:temp_lit))
+  | t => throwError m!"Expected a template atom, got {t}"
 
-partial def delabLit : tempLit → MetaM (TSyntax `temp_lit)
+partial def delabLit : tempExpr → MetaM (TSyntax `temp_lit)
   | t@(.var _) | t@(.const _) | t@(.sort _) => do
     let stx ← delabAtom t
     `(temp_lit| $stx:temp_lit_atom)
@@ -382,6 +424,7 @@ partial def delabLit : tempLit → MetaM (TSyntax `temp_lit)
     let fn ← `(temp_lit_atom| $(t.mkNameIdent):ident)
     let argStx ← args.mapM delabAtom
     `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
+  | t => throwError m!"Expected a template literals, got {t}"
 end
 
 mutual
@@ -392,8 +435,9 @@ partial def delabType : tempExpr → MetaM (TSyntax `template_type)
     `(template_type| $(← delabExpr e):template_stx)
 
 partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
-  | .lit l => do
-    let stx ← delabLit l
+  | t@(.var _) | t@(.const _) | t@(.sort _)
+  | t@(.opHole ..) | t@(.typeHole ..) => do
+    let stx ← delabLit t
     `(template_stx| $stx:temp_lit)
   | .eq l r => do
     let lStx ← delabLit l
@@ -411,7 +455,7 @@ partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
     | .imp =>  `(template_stx| $lStx:template_stx → $rStx:template_stx)
     | .iff => `(template_stx| $lStx:template_stx ↔ $rStx:template_stx)
   | .bind op idx t e => do
-    let name := (tempLit.var idx).mkNameIdent
+    let name := (tempExpr.var idx).mkNameIdent
     let type ← delabType t
     let body ← delabExpr e
     match op with
@@ -420,12 +464,12 @@ partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
 end
 
 structure Template where
-  ctx : List (tempLit × tempExpr)
+  ctx : List (tempExpr × tempExpr)
   statement : tempExpr
 deriving Repr, BEq, ToExpr
 
-abbrev Template.addContext (T : Template) (t : (tempLit × tempExpr)) := {T with ctx := T.ctx.insert t}
-abbrev Template.addContext' (T : Template) (ts : List (tempLit × tempExpr)) := {T with ctx := ts ++ T.ctx}
+abbrev Template.addContext (T : Template) (t : (tempExpr × tempExpr)) := {T with ctx := T.ctx.insert t}
+abbrev Template.addContext' (T : Template) (ts : List (tempExpr × tempExpr)) := {T with ctx := ts ++ T.ctx}
 abbrev Template.setStatement (T : Template) (stx : TSyntax `template_stx) := do
   let st ← elabTemp stx
   return {T with statement := st}

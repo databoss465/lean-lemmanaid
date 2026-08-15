@@ -34,7 +34,7 @@ open TypedAbstraction
 
 def termIsHole (stx : Term) : Bool := stx.raw.isOfKind ``Lean.Parser.Term.hole
 
-def holeBI : tempLit → BinderInfo
+def holeBI : tempExpr → BinderInfo
   | .typeHole .. | .sort .. => .implicit
   | _ => .default
 
@@ -44,17 +44,17 @@ expected type — their recorded type is instance-stripped, so e.g. `ite`
 (`[Decidable c]`) fails defeq against it and must keep the instance binder for the
 application site. The fallback is opHole-only: a `.const` like `0 : Fin _` failing
 should error, not silently re-elaborate as `Nat`. -/
-def fillArg : tempLit → Term → Expr → TermElabM Expr
+def fillArg : tempExpr → Term → Expr → TermElabM Expr
   | .opHole .., stx, ty => do
       let st ← saveState
       try elabTerm stx (some ty)
       catch _ => st.restore; elabTerm stx none
   | _, stx, ty => elabTerm stx (some ty)
 
-def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (tempLit × tempExpr)) : TempElabM Expr := do
+def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (tempExpr × tempExpr)) : TempElabM Expr := do
   -- `bound` accumulates, in dependency order, every fvar that becomes a binder of
   -- the resulting theorem: value vars, sorts, and parameter holes left as `_`.
-  let rec go (ctx : List (tempLit × tempExpr)) (argIdx : Nat) (bound : Array Expr) :
+  let rec go (ctx : List (tempExpr × tempExpr)) (argIdx : Nat) (bound : Array Expr) :
       TempElabM (Expr × Nat) := do
     match ctx with
     | [] =>
@@ -75,11 +75,11 @@ def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (te
         match hole with
         | .var .. =>
             withLocalDecl (hole.mkName) BinderInfo.default ty fun fvar => do
-              modify (fun env => env.insert (.lit hole) fvar)
+              modify (fun env => env.insert hole fvar)
               go rest argIdx (bound.push fvar)
         | .sort .. =>
             withLocalDecl (hole.mkName) BinderInfo.implicit ty fun fvar => do
-              modify (fun env => env.insert (.lit hole) fvar)
+              modify (fun env => env.insert hole fvar)
               go rest argIdx (bound.push fvar)
         | .typeHole .. | .const .. | .opHole .. =>
             if h : argIdx < substStx.size then
@@ -87,14 +87,15 @@ def instantiateCore (t : Template) (substStx : Array Term) (sortedCtx : List (te
                 -- `_`: keep the parameter abstract — bind it as an fvar (a peer of
                 -- vars/sorts), so it never becomes a capturing metavariable.
                 withLocalDecl (hole.mkName) (holeBI hole) ty fun fvar => do
-                  modify (fun env => env.insert (.lit hole) fvar)
+                  modify (fun env => env.insert hole fvar)
                   go rest (argIdx + 1) (bound.push fvar)
               else
                 let arg ← fillArg hole substStx[argIdx] ty
-                modify (fun env => env.insert (.lit hole) arg)
+                modify (fun env => env.insert hole arg)
                 go rest (argIdx + 1) bound
             else
               throwError m!"Missing arguments! Template expects more than {substStx.size} arguments."
+        | t => throwError m!"Expected a template literals, got {t}"
   let (result, argCount) ← go sortedCtx 0 #[]
   if argCount != substStx.size then
     throwError m!"Arity mismatch! Template has {argCount} variables, but input has {substStx.size} arguments."
@@ -127,11 +128,12 @@ def instantiateCore' (t : Template) (subst : Array Expr) : TermElabM Expr := do
         let mut binderFVars := #[]
         let mut paramFVars := #[]
         for (hole, _) in sortedCtx do
-          let some fvar := s.get? (.lit hole)
+          let some fvar := s.get? hole
             | throwError m!"{repr hole} not found in skeleton!"
           match hole with
           | .var .. | .sort .. => binderFVars := binderFVars.push fvar
           | .typeHole .. | .const .. | .opHole .. => paramFVars := paramFVars.push fvar
+          | t => throwError m!"Expected a template literals, got {t}"
         unless subst.size == paramFVars.size do
           throwError m!"Arity mismatch! Template has {paramFVars.size} parameters, \
                         but input has {subst.size} arguments."

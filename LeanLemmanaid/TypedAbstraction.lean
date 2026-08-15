@@ -12,7 +12,7 @@ A `template` contains the context, a list of term-type tuples along with the sta
 ## Main Definitions
 
 - abstractProp : Abstraction for the statement of the template, builds a `tempExpr` from the `Expr` of the theorem
-- abstractTerm : Term-level abstraction, builds a `tempLit` from an `Expr`
+- abstractTerm : Term-level abstraction, builds a `tempExpr` from an `Expr`
 - abstractType : Type-level abstraction, builds a `tempExpr` from an `Expr`, intended to bue used for the types of terms in the statement
 - abstractContext : Abstraction for the context of the template, builds `template.ctx` a list of term-type tuples for all the terms that appear in the statement, along with their types.
 - abstractTypedTemplate : Top-level abstraction. Builds a `template` from an `Expr` of the theorem using the above functions. Also sorts the context by dependency. Also removes leading binders (i.e. parameters) from the statement and puts them in the context.
@@ -255,7 +255,7 @@ mutual
             | pred =>
                 throwError m!"Expected existential predicate to be a lambda, got {pred}"
         | _ =>
-            return .lit (← abstractTerm e)
+            return ← abstractTerm e
     | .forallE name type body bi =>
         if ← liftM <| isProp type then
           return .bin .imp (← abstractProp type) (← abstractProp body)
@@ -267,7 +267,7 @@ mutual
             abstractProp (body.instantiate1 fvar)
     | .fvar _ =>
         if ← liftM <| isProp e then
-          return .lit (.opHole (← getOpIdx e).1 #[])
+          return .opHole (← getOpIdx e).1 #[]
         else
           throwError m!"Expected proposition, got term variable {e}"
     | .mvar .. | .bvar .. | .lam .. | .letE .. =>
@@ -275,11 +275,11 @@ mutual
     | .mdata _ e' => abstractProp e'
     | .lit .. | .const .. | .sort .. | .proj .. =>
         if ← liftM <| isProp e then
-          return .lit (.opHole (← getOpIdx e).1 #[])
+          return .opHole (← getOpIdx e).1 #[]
         else
           throwError m!"Expected proposition, got {e}"
 
-  partial def abstractTerm (e : Expr) : AbstractM tempLit := do
+  partial def abstractTerm (e : Expr) : AbstractM tempExpr := do
     let e := e.consumeMData
 
     -- Collapse a ground value to a single constant. We allow the expression to mention
@@ -336,14 +336,11 @@ mutual
     | .letE .. | .sort .. | .proj .. =>
         throwError m!"Unsupported in term abstraction: {e}"
 
-  partial def abstractTypeLit (e : Expr) : AbstractM tempLit := do
+  partial def abstractTypeLit (e : Expr) : AbstractM tempExpr := do
     let e := e.consumeMData
     if ← liftM <| isPropSafe e then
-      let propExpr ← abstractProp e
-      match propExpr with
-      | .lit l => return l                        -- reuses existing holes (H5, x1, etc.)
-      | _ => return .opHole (← getOpIdx e).1 #[] -- compound prop, stay opaque
-    match e with
+      abstractProp e
+    else match e with
     | .sort lvl =>
       return .sort lvl.toNat
     | .mdata _ e' =>
@@ -376,7 +373,7 @@ mutual
     | .mvar .. | .bvar .. | .lam .. | .forallE .. | .letE .. | .proj .. =>
         throwError m!"Unsupported in type literal abstraction: {e}"
 
-  partial def abstractTypeArg (e : Expr) : AbstractM tempLit := do
+  partial def abstractTypeArg (e : Expr) : AbstractM tempExpr := do
     let e := e.consumeMData
     match e with
     | .sort .. => abstractTypeLit e
@@ -392,14 +389,11 @@ mutual
         else
           abstractTerm e
 
-partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : AbstractM tempLit := do
+partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : AbstractM tempExpr := do
   let expectedType ← liftM <| whnf expectedType
   if expectedType.isSort then
     if ← liftM <| isPropSafe e then
-      let propExpr ← abstractProp e
-      match propExpr with
-      | .lit l => return l                         -- e.g. LE.le c (...) → reuses H5
-      | _ => return .opHole (← getOpIdx e).1 #[]  -- e.g. a = b, A ∧ B → still opaque
+      abstractProp e
     else
       abstractTypeLit e
   else
@@ -430,16 +424,16 @@ partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : Abstr
     | .mdata _ e' =>
         abstractType e'
     | .sort .. | .fvar .. | .const .. | .app .. | .lit .. =>
-        return .lit (← abstractTypeLit e)
+        abstractTypeLit e
     | .mvar .. | .bvar .. | .lam .. | .letE .. | .proj .. =>
         throwError m!"Unsupported in type abstraction: {e}"
 end
 
-partial def abstractContext : AbstractM (List (tempLit × tempExpr)) := do
+partial def abstractContext : AbstractM (List (tempExpr × tempExpr)) := do
   let rec processLoop (processedTypes : List Expr) (processedVars : List FVarId)
                       (processedConsts : List Expr) (processedOps : List Expr)
-                      (result : List (tempLit × tempExpr)) :
-      AbstractM (List (tempLit × tempExpr)) := do
+                      (result : List (tempExpr × tempExpr)) :
+      AbstractM (List (tempExpr × tempExpr)) := do
 
     let s ← get
 
@@ -480,8 +474,8 @@ partial def abstractContext : AbstractM (List (tempLit × tempExpr)) := do
     processLoop nextTypes nextVars nextConsts nextOps currentResult
   processLoop [] [] [] [] []
 
-partial def topologicalSort (remaining : List (tempLit × tempExpr))
-  (sorted : List (tempLit × tempExpr) := []) : Except String (List (tempLit × tempExpr)) :=
+partial def topologicalSort (remaining : List (tempExpr × tempExpr))
+  (sorted : List (tempExpr × tempExpr) := []) : Except String (List (tempExpr × tempExpr)) :=
   if remaining.isEmpty then
     return sorted
   else
@@ -497,7 +491,7 @@ partial def topologicalSort (remaining : List (tempLit × tempExpr))
     -- dependency forces otherwise. This keeps value variables out of scope while a
     -- type hole is being instantiated, so an unfilled type hole (`_`) cannot capture
     -- a value variable when `abstractMVars` later generalizes it.
-    let isTypeLike := fun (lit : tempLit) =>
+    let isTypeLike := fun (lit : tempExpr) =>
       match lit with
       | .typeHole .. | .sort .. => true
       | _ => false

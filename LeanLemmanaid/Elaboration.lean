@@ -61,35 +61,35 @@ def applyExplicitArgs (fn : Expr) (explicitArgs : Array Expr) : TermElabM Expr :
 abbrev TempElabM := StateRefT (Std.HashMap tempExpr Expr) TermElabM
 
 partial def elabTempExpr' : tempExpr → TempElabM Expr
-  | .lit (.sort (some idx)) =>
+  | .sort (some idx) =>
     return Expr.sort (Level.ofNat idx)
-  | .lit (.sort none) =>
+  | .sort none =>
     return Expr.sort (← mkFreshLevelMVar)
-  | .lit l@(.var _) | .lit l@(.const _) => do
+  | l@(.var _) | l@(.const _) => do
     let ctx ← get
-    match ctx.get? (.lit l) with
+    match ctx.get? l with
     | some fvar => return fvar
     | none => throwError m!"{repr l} not found!"
 
-  | .lit (.opHole idx args) => do
+  | .opHole idx args => do
     let ctx ← get
-    let fnFvar ← match ctx.get? (.lit (.opHole idx #[])) with
+    let fnFvar ← match ctx.get? (.opHole idx #[]) with
       | some fvar => pure fvar
       | none => throwError m!"H{idx} not found!"
-    let elabArgs ← args.mapM (fun arg => elabTempExpr' (.lit arg))
+    let elabArgs ← args.mapM (fun arg => elabTempExpr' arg)
     applyExplicitArgs fnFvar elabArgs
 
-  | .lit (.typeHole idx args) => do
+  | .typeHole idx args => do
     let ctx ← get
-    let fnFvar ← match ctx.get? (.lit (.typeHole idx #[])) with
+    let fnFvar ← match ctx.get? (.typeHole idx #[]) with
       | some fvar => pure fvar
       | none => throwError m!"T{idx} not found!"
-    let elabArgs ← args.mapM (fun arg => elabTempExpr' (.lit arg))
+    let elabArgs ← args.mapM (fun arg => elabTempExpr' arg)
     return mkAppN fnFvar elabArgs
 
   | .eq l r => do
-    let lExpr ← elabTempExpr' (.lit l)
-    let rExpr ← elabTempExpr' (.lit r)
+    let lExpr ← elabTempExpr' l
+    let rExpr ← elabTempExpr' r
     mkEq lExpr rExpr
   | .un _ e =>
     return mkApp (mkConst ``Not) (← elabTempExpr' e)
@@ -104,14 +104,14 @@ partial def elabTempExpr' : tempExpr → TempElabM Expr
   | .bind op idx varTy body => do
       let tyExpr ← elabTempExpr' varTy
       withLocalDecl (mkVarName idx) .default tyExpr fun fvar => do
-        modify (·.insert (.lit (.var idx)) fvar)     -- so body's `.var idx` resolves here
+        modify (·.insert (.var idx) fvar)     -- so body's `.var idx` resolves here
         let bodyExpr ← elabTempExpr' body
         match op with
         | .forall => mkForallFVars #[fvar] bodyExpr
         | .exists => mkAppM ``Exists #[← mkLambdaFVars #[fvar] bodyExpr]
 
 
-partial def withContext {α : Type} (sortedCtx : List (tempLit × tempExpr))
+partial def withContext {α : Type} (sortedCtx : List (tempExpr × tempExpr))
   (k : TempElabM α) : TempElabM α := do
   match sortedCtx with
   | [] => k
@@ -121,7 +121,7 @@ partial def withContext {α : Type} (sortedCtx : List (tempLit × tempExpr))
     | .typeHole .. | .sort .. => BinderInfo.implicit
     | _ => BinderInfo.default
     withLocalDecl (hole.mkName) bi ty fun newFVar => do
-      modify (fun env => env.insert (.lit hole) newFVar)
+      modify (fun env => env.insert hole newFVar)
       withContext rest k
 
 def Template.getFVars (t : Template) : TempElabM (Array Expr) := do
@@ -130,7 +130,7 @@ def Template.getFVars (t : Template) : TempElabM (Array Expr) := do
   for (v, _) in t.ctx do
     match v with
     | .var .. => do
-        let fvar := s.get? (.lit v)
+        let fvar := s.get? v
         match fvar with
         | none => throwError m!"{repr v} not found!"
         | some fvar => fvars := fvars.push fvar
@@ -143,7 +143,7 @@ def Template.getParams (t : Template) : TempElabM (Array Expr) := do
   for (v, _) in t.ctx do
     match v with
     | .typeHole .. | .opHole .. | .const .. =>
-        let some fvar := s.get? (.lit v)
+        let some fvar := s.get? v
           | throwError m!"Fatal: Parameter {repr v} not found in state!"
         params := params.push fvar
     | _ => continue
