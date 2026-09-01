@@ -31,7 +31,25 @@ def showTemplate (t : Template) : TermElabM Unit := do
       -- `TermElabM` actions can be lifted into `TempElabM`, but not vice versa. Need to run
       let action : TempElabM Unit := do
         withContext sortedCtx do
-          let prop ← elabTempExpr' t.statement
+          let logTemplateContext (ex : Exception) : TempElabM Unit := do
+            logInfo m!"elabTempExpr' failed: {ex.toMessageData}"
+            logInfo m!"Template context before statement elaboration:\n{sortedCtx}"
+            let ctx ← get
+            let mut ctxMsg : MessageData := .nil
+            for (hole, _) in sortedCtx do
+              match ctx.get? hole with
+              | some fvar =>
+                  let ty ← inferType fvar
+                  ctxMsg := ctxMsg ++ m!"\n{toString hole} := {fvar} : {ty}"
+              | none =>
+                  ctxMsg := ctxMsg ++ m!"\n{toString hole} := <not found>"
+            logInfo m!"Elaborated local context:{ctxMsg}"
+          let prop ←
+            try
+              elabTempExpr' t.statement
+            catch ex =>
+              logTemplateContext ex
+              throw ex
           let mut st : CollectLevelMVars.State := {}
           st ← (← getLCtx).foldlM (fun st decl => pure (collectLevelMVars st decl.type)) st
           st := collectLevelMVars st prop

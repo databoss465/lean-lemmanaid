@@ -106,18 +106,21 @@ instance : Repr tempBinOp where
 
 
 inductive tempBinder
-  | forall | exists
+  | forall | exists | lambda
 deriving BEq, Hashable, ToExpr
 
 instance : Repr tempBinder where
   reprPrec
   | .forall, _ => "Forall"
   | .exists, _ => "Exists"
+  | .lambda, _ => "Lambda"
+
 
 instance : ToString tempBinder where
   toString
   | .forall => "∀"
   | .exists => "∃"
+  | .lambda => "fun"
 
 
 inductive tempExpr
@@ -194,77 +197,16 @@ abbrev tempExpr.mkNameIdent (l : tempExpr) := mkIdent (l.mkName)
 
 -- Syntax for templates
 
-declare_syntax_cat temp_lit
-declare_syntax_cat temp_lit_atom
+declare_syntax_cat temp_term
+declare_syntax_cat temp_atom
 
 -- An atom of template_stx literals is either an identifier or an id in parantheses
-syntax ident : temp_lit_atom
-syntax "(" temp_lit ")" : temp_lit_atom
+syntax ident : temp_atom
+syntax "(" temp_term ")" : temp_atom
 
 -- A template_stx literal can either be one
-syntax temp_lit_atom : temp_lit
-syntax temp_lit_atom temp_lit_atom+ : temp_lit
-
--- Elaborating Literals
-
-mutual    -- Functions that call each other
-
-/- Function to elaborate atoms, i.e. x1, (x1), etc.. -/
-  partial def elabAtom (stx : Syntax) : MetaM tempExpr := do
-    match stx with
-    | `(temp_lit_atom| $id:ident) =>
-      let nameStr := id.getId.toString
-      if nameStr.startsWith "x" then
-        let k ← stxCheck id "x"
-        return tempExpr.var k
-      else if nameStr.startsWith "c" then
-        let k ← stxCheck id "c"
-        return tempExpr.const k
-      -- H"num" -> Operator Hole
-      else if nameStr.startsWith "H" then
-        let n ← stxCheck id "H"
-        return tempExpr.opHole n #[]
-      else if nameStr.startsWith "T" then
-        let n ← stxCheck id "T"
-        return tempExpr.typeHole n #[]
-      else if nameStr == "Sort_u" then
-        return tempExpr.sort none
-      else if nameStr.startsWith "Sort" then
-        let n ← stxCheck id "Sort"
-        return tempExpr.sort (some n)
-      else if nameStr == "Prop" then
-        return tempExpr.sort (some 0)
-      else
-        throwErrorAt id s!"Unknown Lemmanaid identifier prefix for '{nameStr}'. Expected x, H, or T."
-    -- If there's a paranthesis
-    | `(temp_lit_atom| ( $inner:temp_lit ) ) => elabLit inner
-    | _ => throwUnsupportedSyntax
-
-  partial def elabLit (stx : Syntax) : MetaM tempExpr := do
-    match stx with
-    | `(temp_lit| $atm:temp_lit_atom) => elabAtom atm
-    | `(temp_lit| $fnAtom:temp_lit_atom $args:temp_lit_atom*) => do
-      match fnAtom with
-      | `(temp_lit_atom| $id:ident) =>
-        let nameStr := id.getId.toString
-        if nameStr.startsWith "H" then
-          let opIdx ← stxCheck id "H"
-          let mut argExprs := #[]
-          for arg in args do
-            argExprs := argExprs.push (← elabAtom arg)
-          return tempExpr.opHole opIdx argExprs
-        else if nameStr.startsWith "T" then
-          let opIdx ← stxCheck id "T"
-          let mut argExprs := #[]
-          for arg in args do
-            argExprs := argExprs.push (← elabAtom arg)
-          return tempExpr.typeHole opIdx argExprs
-        else
-          throwErrorAt id "Application head must be an operator starting with 'H' (e.g., H1)"
-
-      | _ => throwErrorAt fnAtom "Application head cannot be a complex expression. Use a raw operator."
-    | _ => throwUnsupportedSyntax
-end
+syntax temp_atom : temp_term
+syntax temp_atom temp_atom+ : temp_term
 
 declare_syntax_cat temp_binop
 
@@ -280,20 +222,9 @@ syntax " → " : temp_binop
 syntax " iff " : temp_binop
 syntax " ↔ " : temp_binop
 
-def elabBinOp : Syntax → MetaM tempBinOp
-  | `(temp_binop| and) | `(temp_binop| ∧) => return .and
-  | `(temp_binop| or)  | `(temp_binop| ∨)=> return .or
-  | `(temp_binop| imp) | `(temp_binop| →)=> return .imp
-  | `(temp_binop| iff) | `(temp_binop| ↔)=> return .iff
-  | _ => throwUnsupportedSyntax
-
 declare_syntax_cat temp_unop
 syntax "not " : temp_unop
 syntax "¬" : temp_unop
-
-def elabUnOp : Syntax → MetaM tempUnOp
-  | `(temp_unop| not) | `(temp_unop| ¬) => return .not
-  | _ => throwUnsupportedSyntax
 
 declare_syntax_cat temp_binder
 syntax "forall " : temp_binder
@@ -302,16 +233,11 @@ syntax "∀ " : temp_binder
 syntax "exists " : temp_binder
 syntax "∃ " : temp_binder
 
-def elabBinder : Syntax → MetaM tempBinder
-  | `(temp_binder| forall) | `(temp_binder| ∀) => return .forall
-  | `(temp_binder| exists) | `(temp_binder| ∃)=> return .exists
-  | _ => throwUnsupportedSyntax
-
 -- Represents a "lemma" which is a proposition
 declare_syntax_cat template_stx
 
-syntax temp_lit " = " temp_lit : template_stx              -- Equality propositions
-syntax temp_lit : template_stx                             -- Some literals, can be lemmas (Relational propositions)
+syntax temp_term " = " temp_term : template_stx              -- Equality propositions
+syntax temp_term : template_stx                             -- Some literals, can be lemmas (Relational propositions)
 
 syntax:50 temp_unop template_stx:51 : template_stx              -- Not
 syntax:35 template_stx:36 temp_binop template_stx:35 : template_stx     -- And/Or/Implies
@@ -330,22 +256,116 @@ syntax "Sort " num : template_type
 syntax temp_binder ident ": " template_type ", " template_stx:10 : template_stx     -- Forall/Exists
 syntax temp_binder ident+ ": " template_type ", " template_stx:10 : template_stx
 
+syntax:10 "fun " ident " : " template_type " => " template_stx:10 : temp_term   -- Lambda
+syntax:10 "fun " ident+ " : " template_type " => " template_stx:10 : temp_term   -- Lambda
+
 declare_syntax_cat template_ctx
-syntax temp_lit " : " template_type : template_ctx
+syntax temp_term " : " template_type : template_ctx
+
+def elabBinOp : Syntax → MetaM tempBinOp
+  | `(temp_binop| and) | `(temp_binop| ∧) => return .and
+  | `(temp_binop| or)  | `(temp_binop| ∨)=> return .or
+  | `(temp_binop| imp) | `(temp_binop| →)=> return .imp
+  | `(temp_binop| iff) | `(temp_binop| ↔)=> return .iff
+  | _ => throwUnsupportedSyntax
+
+def elabUnOp : Syntax → MetaM tempUnOp
+  | `(temp_unop| not) | `(temp_unop| ¬) => return .not
+  | _ => throwUnsupportedSyntax
+
+def elabBinder : Syntax → MetaM tempBinder
+  | `(temp_binder| forall) | `(temp_binder| ∀) => return .forall
+  | `(temp_binder| exists) | `(temp_binder| ∃)=> return .exists
+  -- | `(temp_binder| lambda) | `(temp_binder| fun) => return .lambda
+  | _ => throwUnsupportedSyntax
 
 mutual
+/- Function to elaborate atoms, i.e. x1, (x1), etc.. -/
+  partial def elabAtom (stx : Syntax) : MetaM tempExpr := do
+    match stx with
+    | `(temp_atom| $id:ident) =>
+      let nameStr := id.getId.toString
+      -- x"num"
+      if nameStr.startsWith "x" then
+        let k ← stxCheck id "x"
+        return tempExpr.var k
+      -- c"num"
+      else if nameStr.startsWith "c" then
+        let k ← stxCheck id "c"
+        return tempExpr.const k
+      -- H"num" -> Operator Hole
+      else if nameStr.startsWith "H" then
+        let n ← stxCheck id "H"
+        return tempExpr.opHole n #[]
+      -- T"num" -> Type Hole
+      else if nameStr.startsWith "T" then
+        let n ← stxCheck id "T"
+        return tempExpr.typeHole n #[]
+      -- Sorts
+      else if nameStr == "Sort_u" then
+        return tempExpr.sort none
+      else if nameStr.startsWith "Sort" then
+        let n ← stxCheck id "Sort"
+        return tempExpr.sort (some n)
+      -- Prop
+      else if nameStr == "Prop" then
+        return tempExpr.sort (some 0)
+      else
+        throwErrorAt id s!"Unknown Lemmanaid identifier prefix for '{nameStr}'"
+    -- If there's a paranthesis
+    | `(temp_atom| ( $inner:temp_term ) ) => elabTerm inner
+    | _ => throwUnsupportedSyntax
+
+  partial def elabTerm (stx : Syntax) : MetaM tempExpr := do
+    match stx with
+    | `(temp_term| $atm:temp_atom) => elabAtom atm
+    | `(temp_term| $fnAtom:temp_atom $args:temp_atom*) => do
+      match fnAtom with
+      | `(temp_atom| $id:ident) =>
+        let nameStr := id.getId.toString
+        if nameStr.startsWith "H" then
+          let opIdx ← stxCheck id "H"
+          let mut argExprs := #[]
+          for arg in args do
+            argExprs := argExprs.push (← elabAtom arg)
+          return tempExpr.opHole opIdx argExprs
+        else if nameStr.startsWith "T" then
+          let opIdx ← stxCheck id "T"
+          let mut argExprs := #[]
+          for arg in args do
+            argExprs := argExprs.push (← elabAtom arg)
+          return tempExpr.typeHole opIdx argExprs
+        else
+          throwErrorAt id "Application head must be an operator starting with 'H' (e.g., H1)"
+      | _ => throwErrorAt fnAtom "Application head cannot be a complex expression. Use a raw operator."
+    -- Lambda
+    | `(temp_term| fun $var:ident : $type:template_type => $body:template_stx) => do
+      let varIdx ← stxCheck var "x"
+      let bType ← elabTempType type
+      let bodyExpr ← elabTempTypeExpr body
+      return .bind .lambda varIdx bType bodyExpr
+    | `(temp_term| fun $var:ident $vars:ident* : $type:template_type => $body:template_stx) => do
+      let varIdx ← stxCheck var "x"
+      let varsIdx ← vars.mapM (stxCheck · "x")
+      let bType ← elabTempType type
+      let bodyExpr ← elabTempTypeExpr body
+      let inner ← varsIdx.foldrM
+        (fun idx body => return .bind .lambda idx bType body) bodyExpr
+      return .bind .lambda varIdx bType inner
+    | _ => throwUnsupportedSyntax
+
 partial def elabTemp : Syntax → MetaM tempExpr
-  | `(template_stx| $lit:temp_lit) => do
-    let e ← elabLit lit
+  | `(template_stx| $lit:temp_term) => do
+    let e ← elabTerm lit
     match e with
     | .opHole _ _ =>
       return e
     | .var _  | .const _=>
       throwErrorAt lit "Only operator applications can be Propositions"
     | _ => throwUnsupportedSyntax
-  | `(template_stx| $lhs:temp_lit = $rhs:temp_lit) => do
-    let lExpr ← elabLit lhs
-    let rExpr ← elabLit rhs
+  | `(template_stx| $lhs:temp_term = $rhs:temp_term) => do
+    let lExpr ← elabTerm lhs
+    let rExpr ← elabTerm rhs
     return .eq lExpr rExpr
   | `(template_stx| $lhs:template_stx $bin:temp_binop $rhs:template_stx) => do
       let binExpr ← elabBinOp bin
@@ -375,7 +395,6 @@ partial def elabTemp : Syntax → MetaM tempExpr
       elabTemp e
   | _ => throwUnsupportedSyntax
 
-
 partial def elabTempType : Syntax → MetaM tempExpr
   | `(template_type| $t:template_stx) => elabTempTypeExpr t
   | `(template_type| $lhs:template_type → $rhs:template_type) =>
@@ -387,9 +406,9 @@ partial def elabTempType : Syntax → MetaM tempExpr
 
 -- Permissive version: accepts any tempLit (not just opHole), recurses via elabTempType
 partial def elabTempTypeExpr : Syntax → MetaM tempExpr
-  | `(template_stx| $lit:temp_lit) => return (← elabLit lit)
-  | `(template_stx| $lhs:temp_lit = $rhs:temp_lit) =>
-      return .eq (← elabLit lhs) (← elabLit rhs)
+  | `(template_stx| $lit:temp_term) => return (← elabTerm lit)
+  | `(template_stx| $lhs:temp_term = $rhs:temp_term) =>
+      return .eq (← elabTerm lhs) (← elabTerm rhs)
   | `(template_stx| $lhs:template_stx $bin:temp_binop $rhs:template_stx) => do
       return .bin (← elabBinOp bin) (← elabTempTypeExpr lhs) (← elabTempTypeExpr rhs)
   | `(template_stx| $u:temp_unop $e:template_stx) =>
@@ -403,31 +422,34 @@ end
 
 -- Elaborates a single context entry into a (tempLit × tempExpr) pair
 def elabTempCtx :  TSyntax `template_ctx → MetaM (tempExpr × tempExpr)
-  | `(template_ctx| $lit:temp_lit : $ty:template_type) =>
-      return (← elabLit lit, ← elabTempType ty)
+  | `(template_ctx| $lit:temp_term : $ty:template_type) =>
+      return (← elabTerm lit, ← elabTempType ty)
   | _ => throwUnsupportedSyntax
 
 mutual
-partial def delabAtom : tempExpr → MetaM (TSyntax `temp_lit_atom)
+partial def delabAtom : tempExpr → MetaM (TSyntax `temp_atom)
   | t@(.var _) | t@(.const _) | t@(.sort _) =>
-    `(temp_lit_atom| $(t.mkNameIdent):ident)
-  | t@(.opHole ..) | t@(.typeHole ..) => do
-    let inner ← delabLit t
-    `(temp_lit_atom| ($inner:temp_lit))
+    `(temp_atom| $(t.mkNameIdent):ident)
+  | t@(.bind .lambda ..) | t@(.opHole ..) | t@(.typeHole ..) => do
+    let inner ← delabTerm t
+    `(temp_atom| ($inner:temp_term))
   | t => throwError m!"Expected a template atom, got {t}"
 
-partial def delabLit : tempExpr → MetaM (TSyntax `temp_lit)
+partial def delabTerm : tempExpr → MetaM (TSyntax `temp_term)
   | t@(.var _) | t@(.const _) | t@(.sort _) => do
     let stx ← delabAtom t
-    `(temp_lit| $stx:temp_lit_atom)
+    `(temp_term| $stx:temp_atom)
   | t@(.opHole _ args) | t@(.typeHole _ args) => do
-    let fn ← `(temp_lit_atom| $(t.mkNameIdent):ident)
+    let fn ← `(temp_atom| $(t.mkNameIdent):ident)
     let argStx ← args.mapM delabAtom
-    `(temp_lit| $fn:temp_lit_atom $argStx:temp_lit_atom*)
+    `(temp_term| $fn:temp_atom $argStx:temp_atom*)
+  | .bind .lambda idx ty body => do
+    let name := (tempExpr.var idx).mkNameIdent
+    let type ← delabType ty
+    let body ← delabExpr body
+    `(temp_term| fun $name:ident : $type:template_type => $body:template_stx)
   | t => throwError m!"Expected a template literals, got {t}"
-end
 
-mutual
 partial def delabType : tempExpr → MetaM (TSyntax `template_type)
   | .bin .imp l r => do
     `(template_type| $(← delabType l):template_type → $(← delabType r):template_type)
@@ -437,12 +459,12 @@ partial def delabType : tempExpr → MetaM (TSyntax `template_type)
 partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
   | t@(.var _) | t@(.const _) | t@(.sort _)
   | t@(.opHole ..) | t@(.typeHole ..) => do
-    let stx ← delabLit t
-    `(template_stx| $stx:temp_lit)
+    let stx ← delabTerm t
+    `(template_stx| $stx:temp_term)
   | .eq l r => do
-    let lStx ← delabLit l
-    let rStx ← delabLit r
-    `(template_stx| $lStx:temp_lit = $rStx:temp_lit)
+    let lStx ← delabTerm l
+    let rStx ← delabTerm r
+    `(template_stx| $lStx:temp_term = $rStx:temp_term)
   | .un _ e => do
     let stx ← delabExpr e
     `(template_stx| ¬ $stx:template_stx)
@@ -461,6 +483,9 @@ partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
     match op with
     | .forall => `(template_stx| ∀ $name:ident : $type:template_type, $body:template_stx)
     | .exists => `(template_stx| ∃ $name:ident : $type:template_type, $body:template_stx)
+    | .lambda => do
+      let stx ← delabTerm (.bind .lambda idx t e)
+      `(template_stx| $stx:temp_term)
 end
 
 structure Template where
@@ -473,3 +498,25 @@ abbrev Template.addContext' (T : Template) (ts : List (tempExpr × tempExpr)) :=
 abbrev Template.setStatement (T : Template) (stx : TSyntax `template_stx) := do
   let st ← elabTemp stx
   return {T with statement := st}
+
+elab tk:"#test_temp_roundtrip " t:template_stx : command =>
+  runTermElabM fun _ => do
+    let before ← elabTempTypeExpr t
+    let stx ← delabExpr before
+    let after ← elabTempTypeExpr stx
+
+    unless before == after do
+      throwErrorAt tk m!"
+        TempLang round-trip failed.
+
+        Before: {repr before}
+        Syntax: {stx}
+        After:  {repr after}"
+
+    logInfoAt tk m!"Round-trip succeeded: {stx}"
+
+-- #test_temp_roundtrip fun x1 : T1 => x1
+-- #test_temp_roundtrip fun x1 x2 : T1 => H1 x1 x2
+-- #test_temp_roundtrip fun x1 : T1 => H1 x1 = x1
+-- #test_temp_roundtrip fun x1 : T1 => fun x2 : T1 => H1 x1 x2
+-- #test_temp_roundtrip H1 (fun x1 : T1 => x1)

@@ -382,5 +382,39 @@ info: ∀ {T1 : Sort u_1} {T2 : Sort u_2} (x1 : T1 → T2) (x2 : T2 → T1),
 #guard_msgs in
 #instantiate X5 with #[_, _, Function.Injective, Function.LeftInverse, Function.RightInverse]
 
+theorem test_lambda_id {α : Sort u} :
+    (fun x : α => x) = fun x : α => x := rfl
+
+theorem test_lambda_capture {α : Sort u} (a : α) :
+    (fun _ : Unit => a) = fun _ : Unit => a := rfl
+
+theorem test_lambda_nested
+    {α : Sort u} {β : Sort v} {γ : Sort w}
+    (f : α → β → γ) :
+    (fun x : α => fun y : β => f x y) = f := rfl
+
+theorem test_lambda_prop_body {α : Sort u} (a : α) :
+    (fun x : α => x = a) = fun x : α => x = a := rfl
+
+theorem test_lambda_argument
+    {α : Sort u} {β : Sort v}
+    (a : α) (F : (α → α) → β) :
+    F (fun _ : α => a) = F (fun _ : α => a) := rfl
+
+template lambda_id := test_lambda_id
+#show_template lambda_id
+#instantiate lambda_id with #[_]
+
+template lambda_capture := test_lambda_capture
+#show_template lambda_capture
+
+template lambda_nested := test_lambda_nested
+#show_template lambda_nested
+
+template lambda_prop_body := test_lambda_prop_body
+#show_template lambda_prop_body
+
+template lambda_argument := test_lambda_argument
+#show_template lambda_argument
 
 def main : IO Unit := pure ()

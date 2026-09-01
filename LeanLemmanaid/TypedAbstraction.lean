@@ -16,6 +16,15 @@ A `template` contains the context, a list of term-type tuples along with the sta
 - abstractType : Type-level abstraction, builds a `tempExpr` from an `Expr`, intended to bue used for the types of terms in the statement
 - abstractContext : Abstraction for the context of the template, builds `template.ctx` a list of term-type tuples for all the terms that appear in the statement, along with their types.
 - abstractTypedTemplate : Top-level abstraction. Builds a `template` from an `Expr` of the theorem using the above functions. Also sorts the context by dependency. Also removes leading binders (i.e. parameters) from the statement and puts them in the context.
+
+abstractTypedTemplate
+ ├─ abstractProp
+ │   ├─ abstractTerm
+ │   │   └─ abstractTypeArgWithExpected
+ │   └─ abstractType
+ └─ abstractContext
+     └─ abstractType
+
 -/
 
 namespace TypedAbstraction
@@ -332,7 +341,23 @@ mutual
         return .const (← getConstIdx e).1
     | .mdata _ e' =>
         abstractTerm e'
-    | .mvar .. | .bvar .. | .lam .. | .forallE ..
+    | .lam name type body bi => do
+      unless bi == BinderInfo.default do
+        throwError m!"Non-explicit lambda binders are currently unsupported: {e}"
+      withBoundVar name bi type fun idx fvar => do
+        let openedBody := body.instantiate1 fvar
+        let tempBody ←
+          if ← liftM <| isPropSafe openedBody then
+            abstractProp openedBody
+          else
+            let bodyType ← liftM <| whnf (← inferType openedBody)
+            if bodyType.isSort then
+              abstractType openedBody
+            else
+              abstractTerm openedBody
+         return .bind .lambda idx (← abstractType type) tempBody
+
+    | .mvar .. | .bvar .. | .forallE ..
     | .letE .. | .sort .. | .proj .. =>
         throwError m!"Unsupported in term abstraction: {e}"
 
@@ -372,22 +397,6 @@ mutual
         return .const (← getConstIdx e).1
     | .mvar .. | .bvar .. | .lam .. | .forallE .. | .letE .. | .proj .. =>
         throwError m!"Unsupported in type literal abstraction: {e}"
-
-  partial def abstractTypeArg (e : Expr) : AbstractM tempExpr := do
-    let e := e.consumeMData
-    match e with
-    | .sort .. => abstractTypeLit e
-    | .fvar fvarId =>
-        let s ← get
-        match s.vars.get? fvarId with
-        | some pair => return .var pair.1
-        | none => abstractTypeLit e
-    | _ =>
-        let ty ← liftM <| whnf (← inferType e)
-        if ty.isSort then
-          abstractTypeLit e
-        else
-          abstractTerm e
 
 partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : AbstractM tempExpr := do
   let expectedType ← liftM <| whnf expectedType

@@ -109,6 +109,8 @@ partial def elabTempExpr' : tempExpr → TempElabM Expr
         match op with
         | .forall => mkForallFVars #[fvar] bodyExpr
         | .exists => mkAppM ``Exists #[← mkLambdaFVars #[fvar] bodyExpr]
+        | .lambda => mkLambdaFVars #[fvar] bodyExpr
+-- Scoping issue. Might break on H1 x1 (fun x1 : T1 => x1) x1
 
 
 partial def withContext {α : Type} (sortedCtx : List (tempExpr × tempExpr))
