@@ -111,6 +111,9 @@ def getConstIdx (c : Expr) : AbstractM (Nat × Expr) := do
       modify fun s => { s with consts := s.consts.insert c (idx, ty) }
       return (idx, ty)
 
+def isFunctionValued (e : Expr) : MetaM Bool := do
+  return (← whnf (← inferType e)).isForall
+
 /- Returns two arrays: non-explicit arguments applied to the head, and explicit
 arguments that should appear as template arguments.
 Only *leading* implicit args (before the first explicit arg) are included in
@@ -178,7 +181,11 @@ partial def explicitAppArgs (fn : Expr) (args : Array Expr) : MetaM (Array Expr)
 def withAbstractedVar {α : Type} (name : Name) (bi : BinderInfo) (type : Expr)
     (k : Nat → Expr → AbstractM α) : AbstractM α := do
   withLocalDecl name bi type fun fvar => do
-    let (idx, _) ← getVarIdx fvar.fvarId!
+    let (idx, _) ←
+      if ← liftM <| isFunctionValued fvar then
+        getOpIdx fvar
+      else
+        getVarIdx fvar.fvarId!
     k idx fvar
 
 def withBoundVar {α : Type} (name : Name) (bi : BinderInfo) (type : Expr)
@@ -304,6 +311,8 @@ mutual
     | .fvar fvarId =>
         let s ← get
         let ty ← liftM <| whnf (← inferType e)
+        if let some pair := s.ops.get? e then
+          return .opHole pair.1 #[]
         if let some pair := s.vars.get? fvarId then
           return .var pair.1
         if ty.isForall then
@@ -408,6 +417,13 @@ partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : Abstr
   else
     match e.consumeMData with
     | .fvar fvarId =>
+        let s ← get
+        if let some pair := s.ops.get? e.consumeMData then
+          return .opHole pair.1 #[]
+        if let some pair := s.vars.get? fvarId then
+          return .var pair.1
+        if ← liftM <| isFunctionValued e then
+          return .opHole (← getOpIdx e).1 #[]
         return .var (← getVarIdxWithType fvarId expectedType).1
     | _ =>
         abstractTerm e

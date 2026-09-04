@@ -198,16 +198,16 @@ template comp_id := Function.comp_id
 /--
 info: T1 : Sort u_1
 T2 : Sort u_2
-x1 : T1 → T2
-H1 : T1 → T1
-H2 : (T1 → T2) → (T1 → T1) → T1 → T2
-⊢ H2 x1 H1 = x1
+H1 : T1 → T2
+H2 : T1 → T1
+H3 : (T1 → T2) → (T1 → T1) → T1 → T2
+⊢ H3 H1 H2 = H1
 -/
 #guard_msgs in
 #show_template comp_id
-/-- info: ∀ {T1 : Sort u_1} {T2 : Sort u_2} (x1 : T1 → T2), x1 ∘ id = x1 -/
+/-- info: ∀ {T1 : Sort u_1} {T2 : Sort u_2} (H1 : T1 → T2), H1 ∘ id = H1 -/
 #guard_msgs in
-#instantiate comp_id with #[_, _, id, Function.comp]
+#instantiate comp_id with #[_, _, _, id, Function.comp]
 
 
 -- #check not_false_iff
@@ -291,22 +291,22 @@ info: T1 : Sort u_1
 T2 : Sort u_2 → Sort u_3
 T3 : Type
 x1 : T2 T1
-x2 : T1 → T3
 H1 : T2 T1 → T2 T1
-H2 : T2 T1 → (T1 → T3) → T3
-⊢ H2 (H1 x1) x2 = H2 x1 x2
+H2 : T1 → T3
+H3 : T2 T1 → (T1 → T3) → T3
+⊢ H3 (H1 x1) H2 = H3 x1 H2
 -/
 #guard_msgs in
 #show_template list_rev
 /--
-info: ∀ {T1 : Type u_1} (x1 : List T1) (x2 : T1 → Bool) (H1 : List T1 → List T1) (H2 : List T1 → (T1 → Bool) → Bool),
-  H2 (H1 x1) x2 = H2 x1 x2
+info: ∀ {T1 : Type u_1} (x1 : List T1) (H1 : List T1 → List T1) (H2 : T1 → Bool) (H3 : List T1 → (T1 → Bool) → Bool),
+  H3 (H1 x1) H2 = H3 x1 H2
 -/
 #guard_msgs in
-#instantiate list_rev with #[_, List, Bool, _, _]
-/-- info: ∀ {T1 : Type u_1} (x1 : List T1) (x2 : T1 → Bool), x1.reverse.all x2 = x1.all x2 -/
+#instantiate list_rev with #[_, List, Bool, _, _, _]
+/-- info: ∀ {T1 : Type u_1} (x1 : List T1) (H2 : T1 → Bool), x1.reverse.all H2 = x1.all H2 -/
 #guard_msgs in
-#instantiate list_rev with #[_, List, Bool, List.reverse, List.all]
+#instantiate list_rev with #[_, List, Bool, List.reverse, _ , List.all]
 
 -- #check Array.getElem?_append_left
 template array_get := Array.getElem?_append_left
@@ -367,20 +367,20 @@ template X5 := Function.rightInverse_of_injective_of_leftInverse
 /--
 info: T1 : Sort u_1
 T2 : Sort u_2
-x1 : T1 → T2
-x2 : T2 → T1
-H1 : (T1 → T2) → Prop
-H2 H3 : (T1 → T2) → (T2 → T1) → Prop
-⊢ H1 x1 → H2 x1 x2 → H3 x1 x2
+H1 : T1 → T2
+H2 : (T1 → T2) → Prop
+H3 : T2 → T1
+H4 H5 : (T1 → T2) → (T2 → T1) → Prop
+⊢ H2 H1 → H4 H1 H3 → H5 H1 H3
 -/
 #guard_msgs in
 #show_template X5
 /--
-info: ∀ {T1 : Sort u_1} {T2 : Sort u_2} (x1 : T1 → T2) (x2 : T2 → T1),
-  Function.Injective x1 → Function.LeftInverse x1 x2 → Function.RightInverse x1 x2
+info: ∀ {T1 : Sort u_1} {T2 : Sort u_2} (H1 : T1 → T2) (H3 : T2 → T1),
+  Function.Injective H1 → Function.LeftInverse H1 H3 → Function.RightInverse H1 H3
 -/
 #guard_msgs in
-#instantiate X5 with #[_, _, Function.Injective, Function.LeftInverse, Function.RightInverse]
+#instantiate X5 with #[_, _, _, Function.Injective, _, Function.LeftInverse, Function.RightInverse]
 
 theorem test_lambda_id {α : Sort u} :
     (fun x : α => x) = fun x : α => x := rfl
