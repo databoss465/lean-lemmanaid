@@ -95,6 +95,8 @@ elab "template " name:ident " := " thm:ident : command => do
     abstractTheorem (← resolveGlobalConstNoOverload thm)
   modifyEnv fun env =>
     templateExt.addEntry env (name.getId, t)
+  liftTermElabM do
+    withRef name <| showTemplate t
   -- let decl ← `(def $name : Template := abstract $thm)
   -- elabCommand decl
 
@@ -107,6 +109,8 @@ elab "template " name:ident " := " stx:template_stx " where " ctx:template_ctx,*
     | Except.ok sortedCtx => return { ctx := sortedCtx, statement := stmt }
   modifyEnv fun env =>
     templateExt.addEntry env (name.getId, t)
+  liftTermElabM do
+    withRef name <| showTemplate t
 
 elab tk:"#show_template" name:ident : command =>
   liftTermElabM do
