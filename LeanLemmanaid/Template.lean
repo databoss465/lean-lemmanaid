@@ -132,7 +132,7 @@ inductive tempExpr
   | eq : tempExpr → tempExpr → tempExpr
   | un : tempUnOp → tempExpr → tempExpr
   | bin : tempBinOp → tempExpr → tempExpr → tempExpr
-  | bind : tempBinder → Nat → tempExpr → tempExpr → tempExpr
+  | bind : tempBinder → tempExpr → tempExpr → tempExpr → tempExpr
 deriving Repr, BEq, Hashable, ToExpr
 
 partial def tempExpr.contains (expr tgt: tempExpr) : Bool :=
@@ -178,7 +178,7 @@ partial def tempExpr.toString : tempExpr → String
   | .bin op e₁ e₂ =>
       s!"{e₁.toString} {op} {e₂.toString}"
   | .bind b n t e =>
-      s!"{b} {n} {t.toString} {e.toString}"
+      s!"{b} {n.toString} {t.toString} {e.toString}"
 
 instance : ToString tempExpr where
   toString := tempExpr.toString
@@ -340,18 +340,22 @@ mutual
       | _ => throwErrorAt fnAtom "Application head cannot be a complex expression. Use a raw operator."
     -- Lambda
     | `(temp_term| fun $var:ident : $type:template_type => $body:template_stx) => do
-      let varIdx ← stxCheck var "x"
+      -- let varIdx ← stxCheck var "x"
+      let bVar ← elabAtom var
       let bType ← elabTempType type
       let bodyExpr ← elabTempTypeExpr body
-      return .bind .lambda varIdx bType bodyExpr
+      return .bind .lambda bVar bType bodyExpr
     | `(temp_term| fun $var:ident $vars:ident* : $type:template_type => $body:template_stx) => do
-      let varIdx ← stxCheck var "x"
-      let varsIdx ← vars.mapM (stxCheck · "x")
+      -- let varIdx ← stxCheck var "x"
+      -- let varsIdx ← vars.mapM (stxCheck · "x")
+      let bVar ← elabAtom var
+      let bVars ← vars.mapM elabAtom
       let bType ← elabTempType type
       let bodyExpr ← elabTempTypeExpr body
-      let inner ← varsIdx.foldrM
+      -- let inner ← varsIdx.foldrM
+      let inner ← bVars.foldrM
         (fun idx body => return .bind .lambda idx bType body) bodyExpr
-      return .bind .lambda varIdx bType inner
+      return .bind .lambda bVar bType inner
     | _ => throwUnsupportedSyntax
 
 partial def elabTemp : Syntax → MetaM tempExpr
@@ -376,21 +380,21 @@ partial def elabTemp : Syntax → MetaM tempExpr
       let uExpr ← elabUnOp u
       let eExpr ← elabTemp e
       return .un uExpr eExpr
-
+  -- Intended for ∀ and ∃
   | `(template_stx| $b:temp_binder $var:ident : $type:template_type , $e:template_stx) => do
       let binderExpr ← elabBinder b
-      let varIdx ← stxCheck var "x"
+      let bVar ← elabAtom var
       let eExpr ← elabTemp e
       let bType ← elabTempType type
-      return .bind binderExpr varIdx bType eExpr
+      return .bind binderExpr bVar bType eExpr
   | `(template_stx| $b:temp_binder $var:ident $vars:ident* : $type:template_type , $e:template_stx) => do
       let binderExpr ← elabBinder b
       let eExpr ← elabTemp e
-      let varIdx ← stxCheck var "x"
-      let varsIdx ← vars.mapM (stxCheck · "x")
+      let bVar ← elabAtom var
+      let bVars ← vars.mapM elabAtom
       let bType ← elabTempType type
-      let inner ← varsIdx.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx bType pred) eExpr
-      return .bind binderExpr varIdx bType inner
+      let inner ← bVars.foldrM (fun idx pred ↦ return tempExpr.bind binderExpr idx bType pred) eExpr
+      return .bind binderExpr bVar bType inner
   | `(template_stx| ($e:template_stx)) =>
       elabTemp e
   | _ => throwUnsupportedSyntax
@@ -413,8 +417,8 @@ partial def elabTempTypeExpr : Syntax → MetaM tempExpr
       return .bin (← elabBinOp bin) (← elabTempTypeExpr lhs) (← elabTempTypeExpr rhs)
   | `(template_stx| $u:temp_unop $e:template_stx) =>
       return .un (← elabUnOp u) (← elabTempTypeExpr e)
-  | `(template_stx| $b:temp_binder $var:ident : $type:template_type, $e:template_stx) => do
-      return .bind (← elabBinder b) (← stxCheck var "x") (← elabTempType type) (← elabTempTypeExpr e)
+  | `(template_stx| $b:temp_binder $bvar:ident : $type:template_type, $e:template_stx) => do
+      return .bind (← elabBinder b) (← elabAtom bvar) (← elabTempType type) (← elabTempTypeExpr e)
       -- May need support for multi-binding. Subject to Mathlib testing.
   | `(template_stx| ($e:template_stx)) => elabTempTypeExpr e
   | _ => throwUnsupportedSyntax
@@ -443,8 +447,8 @@ partial def delabTerm : tempExpr → MetaM (TSyntax `temp_term)
     let fn ← `(temp_atom| $(t.mkNameIdent):ident)
     let argStx ← args.mapM delabAtom
     `(temp_term| $fn:temp_atom $argStx:temp_atom*)
-  | .bind .lambda idx ty body => do
-    let name := (tempExpr.var idx).mkNameIdent
+  | .bind .lambda bVar ty body => do
+    let name := bVar.mkNameIdent
     let type ← delabType ty
     let body ← delabExpr body
     `(temp_term| fun $name:ident : $type:template_type => $body:template_stx)
@@ -476,15 +480,15 @@ partial def delabExpr : tempExpr → MetaM (TSyntax `template_stx)
     | .or =>  `(template_stx| $lStx:template_stx ∨ $rStx:template_stx)
     | .imp =>  `(template_stx| $lStx:template_stx → $rStx:template_stx)
     | .iff => `(template_stx| $lStx:template_stx ↔ $rStx:template_stx)
-  | .bind op idx t e => do
-    let name := (tempExpr.var idx).mkNameIdent
+  | .bind op bvar t e => do
+    let name := bvar.mkNameIdent
     let type ← delabType t
     let body ← delabExpr e
     match op with
     | .forall => `(template_stx| ∀ $name:ident : $type:template_type, $body:template_stx)
     | .exists => `(template_stx| ∃ $name:ident : $type:template_type, $body:template_stx)
     | .lambda => do
-      let stx ← delabTerm (.bind .lambda idx t e)
+      let stx ← delabTerm (.bind .lambda bvar t e)
       `(template_stx| $stx:temp_term)
 end
 

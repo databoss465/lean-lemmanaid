@@ -35,6 +35,7 @@ structure AbstractionState where
   consts : Std.HashMap Expr (Nat × Expr) := {}
   ops : Std.HashMap Expr (Nat × Expr) := {}
   boundVars : Std.HashSet Nat := {}
+  boundOps : Std.HashSet Nat := {}
 
 abbrev AbstractionState.isEmpty (s : AbstractionState) := s.simpleTypes.isEmpty && s.vars.isEmpty &&
        s.consts.isEmpty && s.ops.isEmpty
@@ -189,11 +190,16 @@ def withAbstractedVar {α : Type} (name : Name) (bi : BinderInfo) (type : Expr)
     k idx fvar
 
 def withBoundVar {α : Type} (name : Name) (bi : BinderInfo) (type : Expr)
-    (k : Nat → Expr → AbstractM α) : AbstractM α := do
+    (k : tempExpr → Expr → AbstractM α) : AbstractM α := do
   withLocalDecl name bi type fun fvar => do
-    let (idx, _) ← getVarIdx fvar.fvarId!
-    modify fun s => { s with boundVars := s.boundVars.insert idx }
-    k idx fvar
+    if ← liftM <| isFunctionValued fvar then
+      let (idx, _) ← getOpIdx fvar
+      modify fun s => {s with boundOps := s.boundOps.insert idx}
+      k (.opHole idx #[]) fvar
+    else
+      let (idx, _) ← getVarIdx fvar.fvarId!
+      modify fun s => {s with boundVars := s.boundVars.insert idx}
+      k (.var idx) fvar
 
 def withIgnoredLocal {α : Type} (name : Name) (bi : BinderInfo) (type : Expr)
     (k : Expr → AbstractM α) : AbstractM α := do
@@ -266,8 +272,8 @@ mutual
               throwError m!"Expected existential to have 1 explicit predicate argument, got {explArgs.size}: {e}"
             match explArgs[0]!.consumeMData with
             | .lam name type body bi =>
-                withBoundVar name bi type fun idx fvar => do
-                  return .bind .exists idx (← abstractType type) (← abstractProp (body.instantiate1 fvar))
+                withBoundVar name bi type fun bindingVar fvar => do
+                  return .bind .exists bindingVar (← abstractType type) (← abstractProp (body.instantiate1 fvar))
             | pred =>
                 throwError m!"Expected existential predicate to be a lambda, got {pred}"
         | _ =>
@@ -276,8 +282,8 @@ mutual
         if ← liftM <| isProp type then
           return .bin .imp (← abstractProp type) (← abstractProp body)
         else if bi == BinderInfo.default then
-          withBoundVar name bi type fun idx fvar => do
-            return .bind .forall idx (← abstractType type) (← abstractProp (body.instantiate1 fvar))
+          withBoundVar name bi type fun bindingVar fvar => do
+            return .bind .forall bindingVar (← abstractType type) (← abstractProp (body.instantiate1 fvar))
         else
           withIgnoredLocal name bi type fun fvar => do
             abstractProp (body.instantiate1 fvar)
@@ -353,7 +359,7 @@ mutual
     | .lam name type body bi => do
       unless bi == BinderInfo.default do
         throwError m!"Non-explicit lambda binders are currently unsupported: {e}"
-      withBoundVar name bi type fun idx fvar => do
+      withBoundVar name bi type fun bindingVar fvar => do
         let openedBody := body.instantiate1 fvar
         let tempBody ←
           if ← liftM <| isPropSafe openedBody then
@@ -364,7 +370,7 @@ mutual
               abstractType openedBody
             else
               abstractTerm openedBody
-         return .bind .lambda idx (← abstractType type) tempBody
+         return .bind .lambda bindingVar (← abstractType type) tempBody
 
     | .mvar .. | .bvar .. | .forallE ..
     | .letE .. | .sort .. | .proj .. =>
@@ -390,6 +396,8 @@ mutual
         return .typeHole (← getTypeIdx partialAppFn) argLits
     | .fvar fvarId =>
         let s ← get
+        if let some pair := s.ops.get? e then
+          return .opHole pair.1 #[]
         if let some pair := s.vars.get? fvarId then
           return .var pair.1
         else if ← liftM <| isPropSafe e then
@@ -435,8 +443,8 @@ partial def abstractTypeArgWithExpected (e : Expr) (expectedType : Expr) : Abstr
     match e with
     | .forallE name type body bi =>
         if body.hasLooseBVar 0 && !(← liftM <| isProp type) then
-          withBoundVar name bi type fun idx fvar => do
-            return .bind .forall idx (← abstractType type) (← abstractType (body.instantiate1 fvar))
+          withBoundVar name bi type fun bindingVar fvar => do
+            return .bind .forall bindingVar (← abstractType type) (← abstractType (body.instantiate1 fvar))
         else
           withIgnoredLocal name bi type fun fvar => do
             let lhs ←
@@ -465,7 +473,7 @@ partial def abstractContext : AbstractM (List (tempExpr × tempExpr)) := do
     let newTypes := (s.simpleTypes.toList.filter (fun (ty, _) => !processedTypes.contains ty)).toArray.qsort (·.2 < ·.2) |>.toList
     let newVars := (s.vars.toList.filter (fun (id, pair) => !processedVars.contains id && !s.boundVars.contains pair.1)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
     let newConsts := (s.consts.toList.filter (fun (expr, _) => !processedConsts.contains expr)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
-    let newOps := (s.ops.toList.filter (fun (expr, _) => !processedOps.contains expr)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
+    let newOps := (s.ops.toList.filter (fun (expr, pair) => !processedOps.contains expr && !s.boundOps.contains pair.1)).toArray.qsort (·.2.1 < ·.2.1) |>.toList
 
     if newTypes.isEmpty && newVars.isEmpty && newConsts.isEmpty && newOps.isEmpty then
       return result

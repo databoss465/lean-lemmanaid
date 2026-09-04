@@ -101,10 +101,10 @@ partial def elabTempExpr' : tempExpr → TempElabM Expr
     | .or => return mkOr lExpr rExpr
     | .iff => return mkIff lExpr rExpr
     | .imp => return Expr.forallE `_ lExpr rExpr .default
-  | .bind op idx varTy body => do
+  | .bind op bindingVar varTy body => do
       let tyExpr ← elabTempExpr' varTy
-      withLocalDecl (mkVarName idx) .default tyExpr fun fvar => do
-        modify (·.insert (.var idx) fvar)     -- so body's `.var idx` resolves here
+      withLocalDecl bindingVar.mkName .default tyExpr fun fvar => do
+        modify (·.insert bindingVar fvar)
         let bodyExpr ← elabTempExpr' body
         match op with
         | .forall => mkForallFVars #[fvar] bodyExpr
